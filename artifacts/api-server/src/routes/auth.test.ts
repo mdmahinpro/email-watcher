@@ -238,7 +238,14 @@ describe("the API gate", () => {
     const res = await request(app).get("/api/healthz");
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: "ok" });
+    expect(res.body.status).toBe("ok");
+  });
+
+  it("keeps /readyz public for container probes", async () => {
+    const res = await request(app).get("/api/readyz");
+
+    // 200 or 503 depending on the mocked database, but never 401.
+    expect(res.status).not.toBe(401);
   });
 });
 

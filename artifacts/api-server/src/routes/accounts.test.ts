@@ -1078,7 +1078,7 @@ describe("GET /api/healthz", () => {
     const res = await request.get("/api/healthz");
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: "ok" });
+    expect(res.body).toMatchObject({ status: "ok", database: "ok" });
   });
 });
 

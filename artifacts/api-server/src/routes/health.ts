@@ -1,23 +1,60 @@
 import { Router, type IRouter } from "express";
-import { sql } from "drizzle-orm";
-import { db } from "@workspace/db";
 import { HealthCheckResponse } from "@workspace/api-zod";
-import { logger } from "../lib/logger";
+import { probeDatabase } from "../lib/db-health";
 
 const router: IRouter = Router();
 
-// Used as the production startup probe (see .replit-artifact/artifact.toml), so
-// it must fail while the database is unreachable rather than report a healthy
-// process that cannot serve any real request.
+/**
+ * Liveness. Answers 200 whenever the process is serving.
+ *
+ * Deliberately does NOT fail when the database is unreachable. This is the path
+ * Render uses as its health check, and a liveness probe that depends on an
+ * external service turns a transient database outage into a failed deploy and a
+ * dead service — the opposite of what a health check is for. The database state is
+ * reported in the body instead, so a monitor can still surface it.
+ *
+ * The probe is bounded well under Render's 5-second abort, so this always returns
+ * rather than hanging.
+ */
 router.get("/healthz", async (_req, res) => {
-  try {
-    await db.execute(sql`select 1`);
-  } catch (err) {
-    logger.error({ err }, "Health check failed: database unreachable");
-    res.status(503).json(HealthCheckResponse.parse({ status: "degraded" }));
+  const database = await probeDatabase();
+
+  res.json({
+    ...HealthCheckResponse.parse({ status: "ok" }),
+    database: database.state,
+    ...(database.latencyMs !== undefined
+      ? { databaseLatencyMs: database.latencyMs }
+      : {}),
+    ...(database.error ? { databaseError: database.error } : {}),
+  });
+});
+
+/**
+ * Readiness. 503 while the database is unreachable.
+ *
+ * Kept separate from /healthz and intentionally not wired to any platform health
+ * check: use it from a monitor when you want to be alerted that the app cannot
+ * actually serve data.
+ */
+router.get("/readyz", async (_req, res) => {
+  const database = await probeDatabase();
+
+  if (database.state !== "ok") {
+    res.status(503).json({
+      status: "degraded",
+      database: database.state,
+      ...(database.error ? { databaseError: database.error } : {}),
+    });
     return;
   }
-  res.json(HealthCheckResponse.parse({ status: "ok" }));
+
+  res.json({
+    status: "ok",
+    database: database.state,
+    ...(database.latencyMs !== undefined
+      ? { databaseLatencyMs: database.latencyMs }
+      : {}),
+  });
 });
 
 export default router;

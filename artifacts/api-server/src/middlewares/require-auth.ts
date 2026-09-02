@@ -6,12 +6,13 @@ import { logger } from "../lib/logger";
  * Paths under /api that are reachable without a session.
  *
  * Deliberately tiny and exact-matched:
- * - `/healthz` is the container startup probe, which runs before anyone can log
- *   in. It reveals only whether the database is reachable.
+ * - `/healthz` and `/readyz` are container probes, which run before anyone can
+ *   log in. They reveal only whether the process and database are alive.
  * - the `/auth/*` endpoints are the gate itself.
  */
 const PUBLIC_PATHS = new Set([
   "/healthz",
+  "/readyz",
   "/auth/session",
   "/auth/login",
   "/auth/logout",

@@ -13,6 +13,49 @@ if (!connectionString) {
 }
 
 /**
+ * Parse the URL up front so a malformed value fails with an explanation rather
+ * than a `TypeError: Invalid URL` from deep inside pg.
+ *
+ * The usual cause is an unencoded password: `@` and `#` are URL delimiters, so a
+ * password containing them splits the authority in the wrong place. They must be
+ * percent-encoded (`%40`, `%23`).
+ */
+function parseConnectionString(url: string): URL {
+  try {
+    return new URL(url);
+  } catch {
+    throw new Error(
+      "DATABASE_URL is not a valid URL. If the password contains any of " +
+        "@ # ? / : or a space, percent-encode it (@ becomes %40, # becomes %23). " +
+        "Also make sure no placeholder brackets [] remain around it.",
+    );
+  }
+}
+
+const parsed = parseConnectionString(connectionString);
+
+/**
+ * Supabase's *direct* connection host resolves to IPv6 only. Many hosts —
+ * Render's free tier among them — have no IPv6 egress, so the socket opens
+ * nowhere and dies as "Connection terminated unexpectedly" with nothing
+ * explaining why. The pooler host is dual-stack, so it is the correct choice on
+ * those platforms.
+ */
+function warnAboutIpv6OnlyHost(host: string): void {
+  const isSupabaseDirect = /^db\.[a-z0-9]+\.supabase\.co$/i.test(host);
+  if (!isSupabaseDirect) return;
+
+  console.warn(
+    `[db] WARNING: "${host}" is Supabase's direct connection host, which is ` +
+      "IPv6-only. If your platform has no IPv6 egress (Render free does not), " +
+      "connections will time out. Use the Connection Pooling string instead: " +
+      "aws-0-<region>.pooler.supabase.com on port 6543.",
+  );
+}
+
+warnAboutIpv6OnlyHost(parsed.hostname);
+
+/**
  * Local development runs Postgres on loopback without TLS; every hosted
  * provider (Supabase, Neon, RDS) requires TLS. Detect which case we are in from
  * the host rather than making the developer remember a flag.
@@ -23,13 +66,7 @@ if (!connectionString) {
 function resolveSsl(url: string): pg.PoolConfig["ssl"] {
   if (/[?&]sslmode=/i.test(url)) return undefined;
 
-  let host: string;
-  try {
-    host = new URL(url).hostname;
-  } catch {
-    // Unparseable URL: let pg surface the real error instead of guessing.
-    return undefined;
-  }
+  const host = parsed.hostname;
 
   const isLocal =
     host === "localhost" ||
@@ -56,6 +93,16 @@ function resolveSsl(url: string): pg.PoolConfig["ssl"] {
  */
 const poolMax = Number(process.env.DATABASE_POOL_MAX ?? 10);
 
+/**
+ * Connection acquisition timeout.
+ *
+ * Kept below the health probe's own budget so a dead database surfaces as a
+ * reported failure rather than a hung request. Overridable for slow links.
+ */
+const connectionTimeoutMillis = Number(
+  process.env.DATABASE_CONNECT_TIMEOUT_MS ?? 10_000,
+);
+
 export const pool = new Pool({
   connectionString,
   ssl: resolveSsl(connectionString),
@@ -63,8 +110,18 @@ export const pool = new Pool({
   // A hosted database can drop an idle connection at any time; fail fast and
   // reconnect rather than hanging a scan on a dead socket.
   idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 15_000,
+  connectionTimeoutMillis: Number.isFinite(connectionTimeoutMillis)
+    ? connectionTimeoutMillis
+    : 10_000,
 });
+
+// Log the resolved target once. Without this, a wrong host or port is invisible
+// and every failure looks identical.
+console.log(
+  `[db] host=${parsed.hostname} port=${parsed.port || "5432"} ` +
+    `database=${parsed.pathname.replace(/^\//, "") || "(default)"} ` +
+    `ssl=${resolveSsl(connectionString) ? "on" : "off"} poolMax=${poolMax}`,
+);
 
 // An idle client that errors (network drop, provider restart) emits on the pool.
 // Without a listener Node treats it as an unhandled 'error' event and exits.
