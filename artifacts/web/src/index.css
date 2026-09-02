@@ -1,0 +1,388 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-card-border: hsl(var(--card-border));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-popover-border: hsl(var(--popover-border));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-primary-border: var(--primary-border);
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-secondary-border: var(--secondary-border);
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-muted-border: var(--muted-border);
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-accent-border: var(--accent-border);
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-destructive-border: var(--destructive-border);
+
+  --color-chart-1: hsl(var(--chart-1));
+  --color-chart-2: hsl(var(--chart-2));
+  --color-chart-3: hsl(var(--chart-3));
+  --color-chart-4: hsl(var(--chart-4));
+  --color-chart-5: hsl(var(--chart-5));
+
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-sidebar-primary: hsl(var(--sidebar-primary));
+  --color-sidebar-primary-foreground: hsl(var(--sidebar-primary-foreground));
+  --color-sidebar-primary-border: var(--sidebar-primary-border);
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+  --color-sidebar-accent-border: var(--sidebar-accent-border);
+  --color-sidebar-ring: hsl(var(--sidebar-ring));
+
+  --font-sans: var(--app-font-sans);
+  --font-serif: var(--app-font-serif);
+  --font-mono: var(--app-font-mono);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/*
+ * Dark glassmorphism palette — deep navy-black surfaces, frosted glass
+ * panels, luminous hairline borders and a crimson signal accent.
+ */
+:root {
+  --button-outline: rgba(255,255,255, .14);
+  --badge-outline: rgba(255,255,255, .06);
+  --opaque-button-border-intensity: 8;
+  --elevate-1: rgba(0,0,0, .35);
+  --elevate-2: rgba(0,0,0, .6);
+
+  --background: 222 45% 4%;
+  --foreground: 213 35% 92%;
+
+  --border: 216 24% 18%;
+
+  --card: 220 32% 7%;
+  --card-foreground: 213 35% 92%;
+  --card-border: 216 24% 18%;
+
+  --sidebar: 222 45% 5%;
+  --sidebar-foreground: 213 35% 92%;
+  --sidebar-border: 216 24% 15%;
+  --sidebar-primary: 356 88% 54%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 356 55% 14%;
+  --sidebar-accent-foreground: 356 100% 84%;
+  --sidebar-ring: 356 88% 54%;
+
+  --popover: 220 32% 8%;
+  --popover-foreground: 213 35% 92%;
+  --popover-border: 216 24% 20%;
+
+  --primary: 356 88% 54%;
+  --primary-foreground: 0 0% 100%;
+  --primary-border: 356 88% 46%;
+
+  --secondary: 218 26% 13%;
+  --secondary-foreground: 213 35% 92%;
+  --secondary-border: 216 24% 20%;
+
+  --muted: 218 26% 13%;
+  --muted-foreground: 215 16% 64%;
+  --muted-border: 216 24% 18%;
+
+  --accent: 218 26% 15%;
+  --accent-foreground: 213 35% 92%;
+  --accent-border: 216 24% 22%;
+
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --destructive-border: 0 72% 44%;
+
+  --input: 216 24% 22%;
+  --ring: 356 88% 54%;
+
+  --chart-1: 356 88% 54%;
+  --chart-2: 199 89% 48%;
+  --chart-3: 38 92% 50%;
+  --chart-4: 262 83% 58%;
+  --chart-5: 142 76% 36%;
+
+  --app-font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --app-font-serif: Georgia, serif;
+  --app-font-mono: 'JetBrains Mono', monospace;
+
+  --radius: 1rem;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    color-scheme: dark;
+    /* Long unbreakable strings (email addresses, IMAP hosts, error text) must
+       never be able to scroll the whole document sideways on a phone. */
+    overflow-x: hidden;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply font-sans antialiased text-foreground;
+    overflow-x: hidden;
+    background-color: hsl(var(--background));
+    background-image:
+      radial-gradient(1100px 540px at 88% -12%, hsl(356 88% 54% / 0.13), transparent 62%),
+      radial-gradient(900px 480px at -12% 108%, hsl(217 90% 50% / 0.10), transparent 60%),
+      radial-gradient(760px 400px at 55% 118%, hsl(356 88% 54% / 0.05), transparent 60%);
+  }
+  /* `background-attachment: fixed` forces a full-viewport repaint per scroll
+     frame and is not honoured correctly by iOS Safari. Only apply it where the
+     device is likely to have the headroom. */
+  @media (min-width: 768px) {
+    body {
+      background-attachment: fixed;
+    }
+  }
+  ::selection {
+    background-color: hsl(356 88% 54% / 0.35);
+    color: hsl(0 0% 100%);
+  }
+}
+
+@layer base {
+  /* Blur is the single biggest scroll cost on mid-range phones. Keep the frosted
+     look on larger screens and fall back to a flat translucent surface below. */
+  @media (max-width: 767px) {
+    .pin-card,
+    .pin-stat-card,
+    .pin-btn-secondary {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* Frosted glass panel */
+@utility pin-card {
+  background: linear-gradient(165deg, hsl(0 0% 100% / 0.07), hsl(0 0% 100% / 0.02) 55%);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  border: 1px solid hsl(0 0% 100% / 0.09);
+  border-radius: 1.25rem;
+  box-shadow:
+    0 18px 40px -18px rgb(0 0 0 / 0.65),
+    inset 0 1px 0 hsl(0 0% 100% / 0.07);
+  transition: border-color 0.2s, box-shadow 0.2s;
+  /* Hover only where a pointer actually exists. On touch, :hover latches after a
+     tap and leaves the card looking permanently selected. */
+  @media (hover: hover) and (pointer: fine) {
+    &:hover {
+      border-color: hsl(0 0% 100% / 0.14);
+      box-shadow:
+        0 22px 48px -18px rgb(0 0 0 / 0.75),
+        inset 0 1px 0 hsl(0 0% 100% / 0.09);
+    }
+  }
+}
+
+/* Dark inset panel (fields, stats groups inside a glass card) */
+@utility pin-inset {
+  background: hsl(0 0% 0% / 0.28);
+  border: 1px solid hsl(0 0% 100% / 0.07);
+  border-radius: 0.9rem;
+}
+
+/* Crimson gradient pill button with glow */
+@utility pin-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, hsl(356 92% 58%), hsl(356 88% 42%));
+  color: #fff;
+  border-radius: 9999px;
+  padding: 0.625rem 1.25rem;
+  /* 44px touch target on mobile, condensed once a pointer is likely. */
+  min-height: 2.75rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+  border: 1px solid hsl(356 90% 66% / 0.35);
+  box-shadow:
+    0 10px 26px -10px hsl(356 88% 50% / 0.65),
+    inset 0 1px 0 hsl(0 0% 100% / 0.28);
+  transition: filter 0.15s, transform 0.1s, box-shadow 0.2s;
+  cursor: pointer;
+  &:hover {
+    filter: brightness(1.1);
+    box-shadow:
+      0 12px 30px -10px hsl(356 88% 50% / 0.8),
+      inset 0 1px 0 hsl(0 0% 100% / 0.28);
+  }
+  &:active {
+    transform: scale(0.98);
+  }
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  @variant sm {
+    min-height: 2.375rem;
+  }
+}
+
+@utility pin-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: hsl(0 0% 100% / 0.06);
+  color: hsl(var(--foreground));
+  border: 1px solid hsl(0 0% 100% / 0.12);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border-radius: 9999px;
+  padding: 0.625rem 1.25rem;
+  min-height: 2.75rem;
+  font-weight: 500;
+  font-size: 0.875rem;
+  transition: all 0.15s;
+  cursor: pointer;
+  &:hover {
+    background: hsl(0 0% 100% / 0.1);
+  }
+  &:active {
+    transform: scale(0.98);
+  }
+  @variant sm {
+    min-height: 2.375rem;
+  }
+}
+
+@utility pin-input {
+  width: 100%;
+  /* An <input> has an intrinsic min-content width; without this it cannot shrink
+     inside a narrow flex/grid track and overflows on a phone. */
+  min-width: 0;
+  border-radius: 0.75rem;
+  border: 1px solid hsl(0 0% 100% / 0.1);
+  background-color: hsl(0 0% 0% / 0.3);
+  color: hsl(var(--foreground));
+  padding: 0.625rem 1rem;
+  /* 16px on mobile: iOS Safari zooms the page when a focused input is smaller. */
+  font-size: 1rem;
+  min-height: 2.75rem;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  &:focus {
+    border-color: hsl(356 88% 54% / 0.6);
+    box-shadow: 0 0 0 3px hsl(356 88% 54% / 0.18);
+  }
+  &::placeholder {
+    color: hsl(var(--muted-foreground));
+  }
+  @variant sm {
+    font-size: 0.875rem;
+    min-height: 2.25rem;
+  }
+}
+
+@utility pin-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  background: hsl(0 0% 100% / 0.06);
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: hsl(var(--foreground) / 0.9);
+  border: 1px solid hsl(0 0% 100% / 0.1);
+}
+
+@utility pin-section-title {
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: hsl(0 0% 100%);
+  @variant sm {
+    font-size: 1.35rem;
+  }
+}
+
+/* Small-caps metadata label. Floors at 11px so it stays legible on a phone. */
+@utility pin-meta-label {
+  display: block;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground));
+}
+
+/* Wraps long unbreakable tokens: email addresses, IMAP hosts, error strings. */
+@utility pin-break {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+@utility pin-stat-card {
+  background: linear-gradient(165deg, hsl(0 0% 100% / 0.07), hsl(0 0% 100% / 0.02) 55%);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  border: 1px solid hsl(0 0% 100% / 0.09);
+  border-radius: 1.25rem;
+  box-shadow:
+    0 18px 40px -18px rgb(0 0 0 / 0.65),
+    inset 0 1px 0 hsl(0 0% 100% / 0.07);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  @variant sm {
+    padding: 1.5rem;
+  }
+}
+
+/* Scrollbar styling */
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 3px;
+  }
+}

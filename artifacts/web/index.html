@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      No maximum-scale: it blocks pinch-zoom (WCAG 1.4.4). The iOS focus-zoom it
+      was working around is handled properly by giving inputs a 16px font size on
+      mobile (see .pin-input in src/index.css).
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#05070d" />
+    <title>Email Watcher</title>
+
+    <!--
+      Icon set, in the order browsers prefer:
+      - favicon.ico carries 16/32/48px for browser chrome and the Windows shell,
+        which ignore SVG favicons entirely.
+      - favicon.svg is used by Chrome and Firefox when available, and stays crisp
+        at any size.
+      - apple-touch-icon.png is required by iOS for home-screen bookmarks; iOS
+        reads neither the SVG nor the manifest for this.
+    -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <!-- This is a private tool; keep it out of search indexes. -->
+    <meta name="robots" content="noindex, nofollow" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

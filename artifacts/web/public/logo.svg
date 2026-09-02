@@ -1,0 +1,36 @@
+<!--
+  Email Watcher — primary app mark.
+
+  Concept: an envelope with a notification badge, i.e. "mail, watched". Kept to
+  three shapes so it stays legible when rasterized down to a 16px favicon; fine
+  detail (eyes, magnifiers, radar sweeps) turns to mush at that size.
+
+  The badge "gap" is punched by drawing a circle filled with the same gradient as
+  the background, using userSpaceOnUse so both elements sample identical
+  coordinates and the seam is invisible.
+
+  Geometry note: the gap circle (centre 146,42 r 22) must not reach the flap's
+  right endpoint, or it erases the end of that stroke and the chevron renders
+  lopsided. Distance from the gap centre to (130,68) is ~30.5, clear of the
+  22 radius plus the 5.5 half-stroke.
+-->
+<svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Email Watcher">
+  <defs>
+    <linearGradient id="ew-bg" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="180" y2="180">
+      <stop offset="0" stop-color="#FF4356"/>
+      <stop offset="0.55" stop-color="#F12230"/>
+      <stop offset="1" stop-color="#B00F1C"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="180" height="180" rx="40" fill="url(#ew-bg)"/>
+
+  <!-- Envelope body -->
+  <rect x="30" y="54" width="112" height="76" rx="14" fill="#FFFFFF"/>
+  <!-- Flap. Drawn as a stroke so it keeps its weight at every raster size. -->
+  <path d="M42 68 L86 103 L130 68" stroke="#B00F1C" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- Notification badge, with a gradient-filled gap ring behind it. -->
+  <circle cx="146" cy="42" r="22" fill="url(#ew-bg)"/>
+  <circle cx="146" cy="42" r="14" fill="#FFFFFF"/>
+</svg>

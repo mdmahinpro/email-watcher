@@ -1,0 +1,22 @@
+<!--
+  Maskable PWA icon.
+
+  Android crops app icons to an arbitrary mask (circle, squircle, teardrop) and
+  only the inner 80% is guaranteed visible. This variant therefore bleeds the
+  background to the full square with no corner radius and keeps the mark inside
+  that safe zone, so no crop shape ever clips it.
+-->
+<svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Email Watcher">
+  <defs>
+    <linearGradient id="ew-mask" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="180" y2="180">
+      <stop offset="0" stop-color="#FF4356"/>
+      <stop offset="0.55" stop-color="#F12230"/>
+      <stop offset="1" stop-color="#B00F1C"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="180" height="180" fill="url(#ew-mask)"/>
+
+  <rect x="47" y="65" width="86" height="58" rx="12" fill="#FFFFFF"/>
+  <path d="M57 76 L90 103 L123 76" stroke="#B00F1C" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

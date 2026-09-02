@@ -1,0 +1,1099 @@
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { authedRequest } from "../test-support/authed";
+
+/**
+ * Chainable stand-in for the Drizzle query builder.
+ *
+ * Every builder method (`select`, `from`, `where`, `set`, `returning`, ...) is
+ * recorded and returns the same chain, and awaiting the chain resolves the next
+ * value queued via `enqueue`. This keeps the route tests focused on request and
+ * response behaviour without needing a live database.
+ */
+const dbMock = vi.hoisted(() => {
+  interface Call {
+    op: string;
+    args: unknown[];
+  }
+
+  const calls: Call[] = [];
+  const queue: unknown[] = [];
+  /** Errors to throw from the next `insert(...)` chains, in order. */
+  const insertErrors: Array<Error | null> = [];
+
+  const makeChain = (rejectWith?: Error): Record<string, unknown> => {
+    const chain: Record<string, unknown> = new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          if (typeof prop === "symbol") return undefined;
+          if (prop === "then") {
+            return (
+              onFulfilled?: (value: unknown) => unknown,
+              onRejected?: (reason: unknown) => unknown,
+            ) => {
+              if (rejectWith) {
+                return Promise.reject(rejectWith).then(onFulfilled, onRejected);
+              }
+              const next = queue.length > 0 ? queue.shift() : [];
+              return Promise.resolve(next).then(onFulfilled, onRejected);
+            };
+          }
+          return (...args: unknown[]) => {
+            calls.push({ op: prop, args });
+            return chain;
+          };
+        },
+      },
+    ) as Record<string, unknown>;
+    return chain;
+  };
+
+  const db = {
+    select: (...args: unknown[]) => {
+      calls.push({ op: "select", args });
+      return makeChain();
+    },
+    insert: (...args: unknown[]) => {
+      calls.push({ op: "insert", args });
+      const err = insertErrors.length > 0 ? insertErrors.shift() : null;
+      return makeChain(err ?? undefined);
+    },
+    update: (...args: unknown[]) => {
+      calls.push({ op: "update", args });
+      return makeChain();
+    },
+    delete: (...args: unknown[]) => {
+      calls.push({ op: "delete", args });
+      return makeChain();
+    },
+    execute: (...args: unknown[]) => {
+      calls.push({ op: "execute", args });
+      const next = queue.length > 0 ? queue.shift() : { rows: [] };
+      return Promise.resolve(next);
+    },
+  };
+
+  return {
+    db,
+    calls,
+    queue,
+    enqueue(...results: unknown[]) {
+      queue.push(...results);
+    },
+    /** Queue per-insert failures; `null` means "this insert succeeds". */
+    failInserts(...errors: Array<Error | null>) {
+      insertErrors.push(...errors);
+    },
+    reset() {
+      calls.length = 0;
+      queue.length = 0;
+      insertErrors.length = 0;
+    },
+    /** Arguments of the single recorded call to `op`. */
+    argsOf(op: string): unknown[] {
+      const matches = calls.filter((c) => c.op === op);
+      if (matches.length !== 1) {
+        throw new Error(
+          `Expected exactly one "${op}" call, saw ${matches.length}`,
+        );
+      }
+      return matches[0]!.args;
+    },
+    /** Arguments of every recorded call to `op`, in order. */
+    allArgsOf(op: string): unknown[][] {
+      return calls.filter((c) => c.op === op).map((c) => c.args);
+    },
+    countOf(op: string): number {
+      return calls.filter((c) => c.op === op).length;
+    },
+  };
+});
+
+// Real table definitions (so drizzle's `eq` receives genuine columns) combined
+// with the fake query builder. `@workspace/db/schema` has no DATABASE_URL
+// requirement, unlike the package root.
+vi.mock("@workspace/db", async () => {
+  const schema = await import("@workspace/db/schema");
+  return {
+    ...schema,
+    db: dbMock.db,
+    pool: { end: async () => undefined },
+  };
+});
+
+// The scheduler is only reachable from PUT /settings, and re-arming it would
+// start real timers.
+vi.mock("../lib/scheduler", () => ({
+  startScheduler: vi.fn(async () => undefined),
+  stopScheduler: vi.fn(async () => undefined),
+  restartScheduler: vi.fn(async () => undefined),
+}));
+
+const { default: app } = await import("../app");
+
+/**
+ * Every route below is behind the session gate, so sign in once and reuse the
+ * cookie. Authenticating through the real endpoint (rather than mocking the
+ * guard) keeps these tests honest about the gate being in place.
+ */
+let request: Awaited<ReturnType<typeof authedRequest>>;
+
+beforeAll(async () => {
+  request = await authedRequest(app);
+});
+
+const NOW = new Date("2026-01-15T10:30:00.000Z");
+
+function accountRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 7,
+    label: "Support",
+    emailAddress: "support@example.com",
+    provider: "generic",
+    captureMode: "keywords",
+    imapHost: "imap.example.com",
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: "smtp.example.com",
+    smtpPort: 465,
+    smtpSecure: true,
+    username: "support@example.com",
+    password: "stored-secret",
+    active: true,
+    lastUidSeen: 120,
+    lastCheckedAt: NOW,
+    lastError: null,
+    deletedAt: null,
+    createdAt: NOW,
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  dbMock.reset();
+});
+
+describe("PATCH /api/accounts/:id", () => {
+  it("applies only the supplied fields", async () => {
+    const existing = accountRow();
+    dbMock.enqueue([existing], [{ ...existing, label: "Billing" }]);
+
+    const res = await request.patch("/api/accounts/7")
+      .send({ label: "Billing" });
+
+    expect(res.status).toBe(200);
+    const [patch] = dbMock.argsOf("set") as [Record<string, unknown>];
+    expect(patch).toEqual({ label: "Billing" });
+  });
+
+  it("leaves the stored password untouched when password is omitted", async () => {
+    const existing = accountRow();
+    dbMock.enqueue([existing], [{ ...existing, username: "billing" }]);
+
+    await request.patch("/api/accounts/7").send({ username: "billing" });
+
+    const [patch] = dbMock.argsOf("set") as [Record<string, unknown>];
+    expect(patch).not.toHaveProperty("password");
+  });
+
+  it("writes a new password when one is supplied", async () => {
+    const existing = accountRow();
+    dbMock.enqueue([existing], [existing]);
+
+    await request.patch("/api/accounts/7")
+      .send({ password: "rotated-secret" });
+
+    const [patch] = dbMock.argsOf("set") as [Record<string, unknown>];
+    expect(patch).toMatchObject({ password: "rotated-secret" });
+  });
+
+  it("never echoes the password back", async () => {
+    const existing = accountRow();
+    dbMock.enqueue([existing], [existing]);
+
+    const res = await request.patch("/api/accounts/7")
+      .send({ password: "rotated-secret" });
+
+    expect(res.body).not.toHaveProperty("password");
+    expect(JSON.stringify(res.body)).not.toContain("rotated-secret");
+  });
+
+  it("resets the UID mark when the mailbox changes", async () => {
+    const existing = accountRow();
+    dbMock.enqueue([existing], [{ ...existing, imapHost: "imap.other.com" }]);
+
+    await request.patch("/api/accounts/7")
+      .send({ imapHost: "imap.other.com" });
+
+    const [patch] = dbMock.argsOf("set") as [Record<string, unknown>];
+    expect(patch).toMatchObject({ lastUidSeen: null });
+  });
+
+  it("keeps the UID mark when the mailbox is unchanged", async () => {
+    const existing = accountRow();
+    dbMock.enqueue([existing], [existing]);
+
+    // Same host as stored: not a mailbox change.
+    await request.patch("/api/accounts/7")
+      .send({ imapHost: "imap.example.com" });
+
+    const [patch] = dbMock.argsOf("set") as [Record<string, unknown>];
+    expect(patch).not.toHaveProperty("lastUidSeen");
+  });
+
+  it("clears a stale error when the account is re-enabled", async () => {
+    const existing = accountRow({ active: false, lastError: "auth failed" });
+    dbMock.enqueue([existing], [{ ...existing, active: true, lastError: null }]);
+
+    await request.patch("/api/accounts/7").send({ active: true });
+
+    const [patch] = dbMock.argsOf("set") as [Record<string, unknown>];
+    expect(patch).toEqual({ active: true, lastError: null });
+  });
+
+  it("keeps a reported error visible after a cosmetic change", async () => {
+    const existing = accountRow({ lastError: "auth failed" });
+    dbMock.enqueue([existing], [{ ...existing, label: "Renamed" }]);
+
+    await request.patch("/api/accounts/7").send({ label: "Renamed" });
+
+    const [patch] = dbMock.argsOf("set") as [Record<string, unknown>];
+    expect(patch).not.toHaveProperty("lastError");
+  });
+
+  it("pauses an account without touching any other field", async () => {
+    const existing = accountRow();
+    dbMock.enqueue([existing], [{ ...existing, active: false }]);
+
+    const res = await request.patch("/api/accounts/7")
+      .send({ active: false });
+
+    expect(res.status).toBe(200);
+    const [patch] = dbMock.argsOf("set") as [Record<string, unknown>];
+    expect(patch).toEqual({ active: false });
+  });
+
+  it("returns the account unchanged for an empty patch", async () => {
+    dbMock.enqueue([accountRow()]);
+
+    const res = await request.patch("/api/accounts/7").send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(7);
+    expect(dbMock.countOf("update")).toBe(0);
+  });
+
+  it("returns 404 for an unknown account and does not update", async () => {
+    dbMock.enqueue([]);
+
+    const res = await request.patch("/api/accounts/999")
+      .send({ label: "Ghost" });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("NotFound");
+    expect(dbMock.countOf("update")).toBe(0);
+  });
+
+  it("rejects an invalid field before reading the account", async () => {
+    const res = await request.patch("/api/accounts/7").send({ label: "" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("ValidationError");
+    expect(dbMock.countOf("select")).toBe(0);
+  });
+
+  it("rejects a malformed id", async () => {
+    const res = await request.patch("/api/accounts/not-a-number")
+      .send({ label: "Valid" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("ValidationError");
+  });
+
+  it("rejects an unparseable email address", async () => {
+    const res = await request.patch("/api/accounts/7")
+      .send({ emailAddress: "nope" });
+
+    expect(res.status).toBe(400);
+    expect(dbMock.countOf("select")).toBe(0);
+  });
+
+  it("switches an account between capture modes", async () => {
+    const existing = accountRow({ captureMode: "keywords" });
+    dbMock.enqueue([existing], [{ ...existing, captureMode: "all" }]);
+
+    const res = await request.patch("/api/accounts/7")
+      .send({ captureMode: "all" });
+
+    expect(res.status).toBe(200);
+    const [patch] = dbMock.argsOf("set") as [Record<string, unknown>];
+    expect(patch).toEqual({ captureMode: "all" });
+  });
+
+  it("rejects an unknown capture mode", async () => {
+    const res = await request.patch("/api/accounts/7")
+      .send({ captureMode: "everything" });
+
+    expect(res.status).toBe(400);
+    expect(dbMock.countOf("select")).toBe(0);
+  });
+});
+
+describe("DELETE /api/accounts/:id", () => {
+  it("soft-deletes rather than issuing a DELETE, so history is preserved", async () => {
+    const res = await request.delete("/api/accounts/7");
+
+    expect(res.status).toBe(204);
+    // A hard delete would destroy the matched_messages that reference this row.
+    expect(dbMock.countOf("delete")).toBe(0);
+    expect(dbMock.countOf("update")).toBe(1);
+
+    const [patch] = dbMock.argsOf("set") as [Record<string, unknown>];
+    expect(patch["deletedAt"]).toBeInstanceOf(Date);
+    // Also deactivated so the scheduler stops polling it immediately.
+    expect(patch["active"]).toBe(false);
+  });
+
+  it("rejects a malformed id", async () => {
+    const res = await request.delete("/api/accounts/nope");
+
+    expect(res.status).toBe(400);
+    expect(dbMock.countOf("update")).toBe(0);
+  });
+});
+
+describe("POST /api/accounts/bulk", () => {
+  const body = {
+    accounts: [
+      { emailAddress: "one@example.com" },
+      { emailAddress: "two@example.com" },
+    ],
+    password: "shared-secret",
+    imapHost: "imap.example.com",
+    smtpHost: "smtp.example.com",
+  };
+
+  it("creates one account per address with the shared credentials", async () => {
+    dbMock.enqueue(
+      [], // no existing addresses
+      [accountRow({ id: 11, emailAddress: "one@example.com" })],
+      [accountRow({ id: 12, emailAddress: "two@example.com" })],
+    );
+
+    const res = await request.post("/api/accounts/bulk").send(body);
+
+    expect(res.status).toBe(200);
+    expect(res.body.created).toHaveLength(2);
+    expect(res.body.failed).toEqual([]);
+
+    const inserts = dbMock.allArgsOf("values").map((a) => a[0]);
+    expect(inserts).toHaveLength(2);
+    for (const row of inserts as Array<Record<string, unknown>>) {
+      expect(row["password"]).toBe("shared-secret");
+      expect(row["imapHost"]).toBe("imap.example.com");
+      expect(row["smtpHost"]).toBe("smtp.example.com");
+      // Spec defaults are applied by the zod schema.
+      expect(row["imapPort"]).toBe(993);
+      expect(row["smtpPort"]).toBe(465);
+      expect(row["active"]).toBe(true);
+    }
+  });
+
+  it("defaults label and username to the address", async () => {
+    dbMock.enqueue([], [accountRow({ id: 11 })]);
+
+    await request.post("/api/accounts/bulk")
+      .send({ ...body, accounts: [{ emailAddress: "solo@example.com" }] });
+
+    const [row] = dbMock.argsOf("values") as [Record<string, unknown>];
+    expect(row["label"]).toBe("solo@example.com");
+    expect(row["username"]).toBe("solo@example.com");
+  });
+
+  it("honours an explicit label and username per entry", async () => {
+    dbMock.enqueue([], [accountRow({ id: 11 })]);
+
+    await request.post("/api/accounts/bulk")
+      .send({
+        ...body,
+        accounts: [
+          {
+            emailAddress: "solo@example.com",
+            label: "Solo Inbox",
+            username: "solo-login",
+          },
+        ],
+      });
+
+    const [row] = dbMock.argsOf("values") as [Record<string, unknown>];
+    expect(row["label"]).toBe("Solo Inbox");
+    expect(row["username"]).toBe("solo-login");
+  });
+
+  it("never echoes the shared password back", async () => {
+    dbMock.enqueue(
+      [],
+      [accountRow({ id: 11 })],
+      [accountRow({ id: 12 })],
+    );
+
+    const res = await request.post("/api/accounts/bulk").send(body);
+
+    expect(JSON.stringify(res.body)).not.toContain("shared-secret");
+  });
+
+  it("reports duplicates within the request instead of inserting twice", async () => {
+    dbMock.enqueue([], [accountRow({ id: 11 })]);
+
+    const res = await request.post("/api/accounts/bulk")
+      .send({
+        ...body,
+        accounts: [
+          { emailAddress: "dup@example.com" },
+          { emailAddress: "DUP@example.com" },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(dbMock.countOf("values")).toBe(1);
+    expect(res.body.failed).toHaveLength(1);
+    expect(res.body.failed[0].reason).toMatch(/duplicate/i);
+  });
+
+  it("skips addresses that already exist as live accounts", async () => {
+    dbMock.enqueue(
+      [{ emailAddress: "one@example.com" }], // already taken
+      [accountRow({ id: 12, emailAddress: "two@example.com" })],
+    );
+
+    const res = await request.post("/api/accounts/bulk").send(body);
+
+    expect(res.status).toBe(200);
+    expect(res.body.created).toHaveLength(1);
+    expect(res.body.failed).toHaveLength(1);
+    expect(res.body.failed[0].emailAddress).toBe("one@example.com");
+    expect(res.body.failed[0].reason).toMatch(/already exists/i);
+  });
+
+  it("keeps going when one insert fails", async () => {
+    dbMock.enqueue([], [accountRow({ id: 12 })]);
+    dbMock.failInserts(new Error("constraint violation"), null);
+
+    const res = await request.post("/api/accounts/bulk").send(body);
+
+    expect(res.status).toBe(200);
+    expect(res.body.created).toHaveLength(1);
+    expect(res.body.failed).toHaveLength(1);
+    expect(res.body.failed[0].reason).toBe("constraint violation");
+  });
+
+  it("rejects an empty account list", async () => {
+    const res = await request.post("/api/accounts/bulk")
+      .send({ ...body, accounts: [] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("ValidationError");
+  });
+
+  it("rejects a malformed address before touching the database", async () => {
+    const res = await request.post("/api/accounts/bulk")
+      .send({ ...body, accounts: [{ emailAddress: "not-an-email" }] });
+
+    expect(res.status).toBe(400);
+    expect(dbMock.countOf("values")).toBe(0);
+  });
+
+  it("requires the shared password", async () => {
+    const { password: _password, ...withoutPassword } = body;
+
+    const res = await request.post("/api/accounts/bulk")
+      .send(withoutPassword);
+
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a batch larger than the documented maximum", async () => {
+    const res = await request.post("/api/accounts/bulk")
+      .send({
+        ...body,
+        accounts: Array.from({ length: 201 }, (_, i) => ({
+          emailAddress: `user${i}@example.com`,
+        })),
+      });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/accounts", () => {
+  it("omits password, lastUidSeen and deletedAt, and serializes dates", async () => {
+    dbMock.enqueue([accountRow()]);
+
+    const res = await request.get("/api/accounts");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).not.toHaveProperty("password");
+    expect(res.body[0]).not.toHaveProperty("lastUidSeen");
+    expect(res.body[0]).not.toHaveProperty("deletedAt");
+    expect(res.body[0].createdAt).toBe(NOW.toISOString());
+    expect(res.body[0].lastCheckedAt).toBe(NOW.toISOString());
+  });
+
+  it("reports a never-checked account as null rather than omitting the field", async () => {
+    dbMock.enqueue([accountRow({ lastCheckedAt: null })]);
+
+    const res = await request.get("/api/accounts");
+
+    expect(res.body[0].lastCheckedAt).toBeNull();
+  });
+
+  it("exposes the provider", async () => {
+    dbMock.enqueue([accountRow({ provider: "hostinger" })]);
+
+    const res = await request.get("/api/accounts");
+
+    expect(res.body[0].provider).toBe("hostinger");
+  });
+
+  it("exposes the capture mode", async () => {
+    dbMock.enqueue([accountRow({ captureMode: "all" })]);
+
+    const res = await request.get("/api/accounts");
+
+    expect(res.body[0].captureMode).toBe("all");
+  });
+
+  it("accepts a provider filter", async () => {
+    dbMock.enqueue([accountRow({ provider: "hostinger" })]);
+
+    const res = await request.get("/api/accounts?provider=hostinger");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+  });
+
+  it("rejects an unknown provider", async () => {
+    const res = await request.get("/api/accounts?provider=gmail");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("ValidationError");
+    expect(dbMock.countOf("select")).toBe(0);
+  });
+});
+
+describe("POST /api/accounts", () => {
+  it("tags a manually configured account as generic", async () => {
+    dbMock.enqueue([accountRow({ id: 20 })]);
+
+    const res = await request.post("/api/accounts").send({
+      label: "Manual",
+      emailAddress: "manual@example.com",
+      imapHost: "imap.example.com",
+      smtpHost: "smtp.example.com",
+      username: "manual@example.com",
+      password: "pw",
+    });
+
+    expect(res.status).toBe(201);
+    const [row] = dbMock.argsOf("values") as [Record<string, unknown>];
+    expect(row["provider"]).toBe("generic");
+    // The generic form is the keyword triage path, not the archive.
+    expect(row["captureMode"]).toBe("keywords");
+  });
+});
+
+describe("GET /api/accounts/hostinger/defaults", () => {
+  it("returns Hostinger's documented settings", async () => {
+    const res = await request.get("/api/accounts/hostinger/defaults");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      imapHost: "imap.hostinger.com",
+      imapPort: 993,
+      imapSecure: true,
+      smtpHost: "smtp.hostinger.com",
+      smtpPortSsl: 465,
+      smtpPortStartTls: 587,
+    });
+  });
+});
+
+describe("POST /api/accounts/hostinger", () => {
+  it("fills in Hostinger's servers and uses the address as the username", async () => {
+    dbMock.enqueue(
+      [], // nothing already taken
+      [accountRow({ id: 30, provider: "hostinger" })],
+    );
+
+    const res = await request.post("/api/accounts/hostinger")
+      .send({
+        mailboxes: [{ emailAddress: "sales@mydomain.com" }],
+        password: "shared-pw",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.created).toHaveLength(1);
+    expect(res.body.failed).toEqual([]);
+
+    const [row] = dbMock.argsOf("values") as [Record<string, unknown>];
+    expect(row).toMatchObject({
+      provider: "hostinger",
+      emailAddress: "sales@mydomain.com",
+      // Hostinger authenticates with the full address, not a local part.
+      username: "sales@mydomain.com",
+      label: "sales@mydomain.com",
+      imapHost: "imap.hostinger.com",
+      imapPort: 993,
+      imapSecure: true,
+      smtpHost: "smtp.hostinger.com",
+      smtpPort: 465,
+      smtpSecure: true,
+      password: "shared-pw",
+      active: true,
+      // Hostinger mailboxes archive everything by default.
+      captureMode: "all",
+    });
+  });
+
+  it("can opt a batch into keyword triage instead of archiving", async () => {
+    dbMock.enqueue([], [accountRow({ id: 30 })]);
+
+    await request.post("/api/accounts/hostinger")
+      .send({
+        mailboxes: [{ emailAddress: "sales@mydomain.com" }],
+        password: "pw",
+        captureMode: "keywords",
+      });
+
+    const [row] = dbMock.argsOf("values") as [Record<string, unknown>];
+    expect(row["captureMode"]).toBe("keywords");
+  });
+
+  it("rejects an unknown captureMode", async () => {
+    const res = await request.post("/api/accounts/hostinger")
+      .send({
+        mailboxes: [{ emailAddress: "sales@mydomain.com" }],
+        password: "pw",
+        captureMode: "everything",
+      });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("uses port 587 with secure=false for STARTTLS", async () => {
+    dbMock.enqueue([], [accountRow({ id: 30 })]);
+
+    await request.post("/api/accounts/hostinger")
+      .send({
+        mailboxes: [{ emailAddress: "sales@mydomain.com" }],
+        password: "shared-pw",
+        smtpMode: "starttls",
+      });
+
+    const [row] = dbMock.argsOf("values") as [Record<string, unknown>];
+    // nodemailer reads `secure: false` on 587 as "upgrade via STARTTLS".
+    expect(row["smtpPort"]).toBe(587);
+    expect(row["smtpSecure"]).toBe(false);
+  });
+
+  it("prefers a per-mailbox password over the shared one", async () => {
+    dbMock.enqueue(
+      [],
+      [accountRow({ id: 30 })],
+      [accountRow({ id: 31 })],
+    );
+
+    await request.post("/api/accounts/hostinger")
+      .send({
+        mailboxes: [
+          { emailAddress: "a@mydomain.com", password: "own-pw" },
+          { emailAddress: "b@mydomain.com" },
+        ],
+        password: "shared-pw",
+      });
+
+    const rows = dbMock.allArgsOf("values").map((a) => a[0]) as Array<
+      Record<string, unknown>
+    >;
+    expect(rows[0]!["password"]).toBe("own-pw");
+    expect(rows[1]!["password"]).toBe("shared-pw");
+  });
+
+  it("works with per-mailbox passwords and no shared password", async () => {
+    dbMock.enqueue([], [accountRow({ id: 30 })]);
+
+    const res = await request.post("/api/accounts/hostinger")
+      .send({
+        mailboxes: [{ emailAddress: "a@mydomain.com", password: "own-pw" }],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.created).toHaveLength(1);
+  });
+
+  it("reports a mailbox that has no password and no shared fallback", async () => {
+    dbMock.enqueue([], [accountRow({ id: 30 })]);
+
+    const res = await request.post("/api/accounts/hostinger")
+      .send({
+        mailboxes: [
+          { emailAddress: "a@mydomain.com", password: "own-pw" },
+          { emailAddress: "b@mydomain.com" },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.created).toHaveLength(1);
+    expect(res.body.failed).toHaveLength(1);
+    expect(res.body.failed[0].emailAddress).toBe("b@mydomain.com");
+    expect(res.body.failed[0].reason).toMatch(/no shared password/i);
+  });
+
+  it("honours an explicit label", async () => {
+    dbMock.enqueue([], [accountRow({ id: 30 })]);
+
+    await request.post("/api/accounts/hostinger")
+      .send({
+        mailboxes: [
+          { emailAddress: "sales@mydomain.com", label: "Sales Inbox" },
+        ],
+        password: "pw",
+      });
+
+    const [row] = dbMock.argsOf("values") as [Record<string, unknown>];
+    expect(row["label"]).toBe("Sales Inbox");
+  });
+
+  it("reports duplicates within the request instead of inserting twice", async () => {
+    dbMock.enqueue([], [accountRow({ id: 30 })]);
+
+    const res = await request.post("/api/accounts/hostinger")
+      .send({
+        mailboxes: [
+          { emailAddress: "dup@mydomain.com" },
+          { emailAddress: "DUP@mydomain.com" },
+        ],
+        password: "pw",
+      });
+
+    expect(dbMock.countOf("values")).toBe(1);
+    expect(res.body.failed).toHaveLength(1);
+    expect(res.body.failed[0].reason).toMatch(/duplicate/i);
+  });
+
+  it("skips mailboxes that already exist", async () => {
+    dbMock.enqueue(
+      [{ emailAddress: "taken@mydomain.com" }],
+      [accountRow({ id: 31 })],
+    );
+
+    const res = await request.post("/api/accounts/hostinger")
+      .send({
+        mailboxes: [
+          { emailAddress: "taken@mydomain.com" },
+          { emailAddress: "fresh@mydomain.com" },
+        ],
+        password: "pw",
+      });
+
+    expect(res.body.created).toHaveLength(1);
+    expect(res.body.failed).toHaveLength(1);
+    expect(res.body.failed[0].reason).toMatch(/already exists/i);
+  });
+
+  it("never echoes a password back", async () => {
+    dbMock.enqueue([], [accountRow({ id: 30 })]);
+
+    const res = await request.post("/api/accounts/hostinger")
+      .send({
+        mailboxes: [{ emailAddress: "a@mydomain.com", password: "secret-pw" }],
+      });
+
+    expect(JSON.stringify(res.body)).not.toContain("secret-pw");
+  });
+
+  it("rejects an empty mailbox list", async () => {
+    const res = await request.post("/api/accounts/hostinger")
+      .send({ mailboxes: [], password: "pw" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("ValidationError");
+  });
+
+  it("rejects a malformed address before touching the database", async () => {
+    const res = await request.post("/api/accounts/hostinger")
+      .send({ mailboxes: [{ emailAddress: "nope" }], password: "pw" });
+
+    expect(res.status).toBe(400);
+    expect(dbMock.countOf("values")).toBe(0);
+  });
+
+  it("rejects an unknown smtpMode", async () => {
+    const res = await request.post("/api/accounts/hostinger")
+      .send({
+        mailboxes: [{ emailAddress: "a@mydomain.com" }],
+        password: "pw",
+        smtpMode: "plaintext",
+      });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a batch larger than the documented maximum", async () => {
+    const res = await request.post("/api/accounts/hostinger")
+      .send({
+        mailboxes: Array.from({ length: 201 }, (_, i) => ({
+          emailAddress: `user${i}@mydomain.com`,
+        })),
+        password: "pw",
+      });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/messages", () => {
+  const messageRow = (overrides: Record<string, unknown> = {}) => ({
+    id: 1,
+    accountId: 7,
+    accountLabel: "Support",
+    accountEmail: "support@example.com",
+    accountDeletedAt: null,
+    messageUid: "120",
+    messageId: "<abc@example.com>",
+    fromAddress: "rewards@example.com",
+    toAddress: "support@example.com",
+    subject: "Claim your reward",
+    snippet: "You have a reward waiting",
+    receivedAt: NOW,
+    matchedKeywords: ["claim"],
+    forwarded: false,
+    forwardError: null,
+    createdAt: NOW,
+    ...overrides,
+  });
+
+  it("exposes the forwarding failure reason", async () => {
+    dbMock.enqueue([
+      messageRow({ forwarded: false, forwardError: "SMTP 535 auth failed" }),
+    ]);
+
+    const res = await request.get("/api/messages");
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].forwardError).toBe("SMTP 535 auth failed");
+  });
+
+  it("keeps the captured attribution and flags a removed account", async () => {
+    dbMock.enqueue([
+      messageRow({
+        accountLabel: "Support (old name)",
+        accountEmail: "old@example.com",
+        accountDeletedAt: NOW,
+      }),
+    ]);
+
+    const res = await request.get("/api/messages");
+
+    // The snapshot survives the account being removed, so history stays readable.
+    expect(res.body[0].accountId).toBe(7);
+    expect(res.body[0].accountLabel).toBe("Support (old name)");
+    expect(res.body[0].accountEmail).toBe("old@example.com");
+    expect(res.body[0].accountDeleted).toBe(true);
+    // The internal timestamp is not part of the API contract.
+    expect(res.body[0]).not.toHaveProperty("accountDeletedAt");
+  });
+
+  it("reports a live account as not deleted", async () => {
+    dbMock.enqueue([messageRow()]);
+
+    const res = await request.get("/api/messages");
+
+    expect(res.body[0].accountDeleted).toBe(false);
+  });
+
+  it("applies limit and offset for pagination", async () => {
+    dbMock.enqueue([messageRow()]);
+
+    const res = await request.get("/api/messages?limit=25&offset=50");
+
+    expect(res.status).toBe(200);
+    expect(dbMock.argsOf("limit")).toEqual([25]);
+    expect(dbMock.argsOf("offset")).toEqual([50]);
+  });
+
+  it("defaults to the first page", async () => {
+    dbMock.enqueue([messageRow()]);
+
+    await request.get("/api/messages");
+
+    expect(dbMock.argsOf("limit")).toEqual([100]);
+    expect(dbMock.argsOf("offset")).toEqual([0]);
+  });
+
+  it("rejects a non-numeric limit", async () => {
+    const res = await request.get("/api/messages?limit=lots");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("ValidationError");
+  });
+
+  it("rejects a limit above the documented maximum", async () => {
+    const res = await request.get("/api/messages?limit=5000");
+
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a negative offset", async () => {
+    const res = await request.get("/api/messages?offset=-5");
+
+    expect(res.status).toBe(400);
+  });
+
+  it("omits bodies, which would make a page megabytes", async () => {
+    dbMock.enqueue([messageRow()]);
+
+    const res = await request.get("/api/messages");
+
+    // Bodies come from GET /messages/:id only.
+    expect(res.body[0]).not.toHaveProperty("bodyText");
+    expect(res.body[0]).not.toHaveProperty("bodyHtml");
+    expect(res.body[0].snippet).toBe("You have a reward waiting");
+  });
+});
+
+describe("GET /api/messages/:id", () => {
+  const detailRow = (overrides: Record<string, unknown> = {}) => ({
+    id: 1,
+    accountId: 7,
+    accountLabel: "Support",
+    accountEmail: "support@example.com",
+    accountDeletedAt: null,
+    messageUid: "120",
+    messageId: "<abc@example.com>",
+    fromAddress: "rewards@example.com",
+    toAddress: "support@example.com",
+    subject: "Claim your reward",
+    snippet: "You have a reward waiting",
+    bodyText: "Amount: $60.00. The complete body, every character of it.",
+    bodyHtml: "<p>Amount: $60.00</p>",
+    bodyTruncated: false,
+    receivedAt: NOW,
+    createdAt: NOW,
+    matchedKeywords: ["claim"],
+    forwarded: true,
+    forwardError: null,
+    ...overrides,
+  });
+
+  it("returns the full body, which the list endpoint omits", async () => {
+    dbMock.enqueue([detailRow()]);
+
+    const res = await request.get("/api/messages/1");
+
+    expect(res.status).toBe(200);
+    expect(res.body.bodyText).toBe(
+      "Amount: $60.00. The complete body, every character of it.",
+    );
+    expect(res.body.bodyHtml).toBe("<p>Amount: $60.00</p>");
+  });
+
+  it("includes the keyword and forwarding fields", async () => {
+    dbMock.enqueue([detailRow()]);
+
+    const res = await request.get("/api/messages/1");
+
+    expect(res.body.matchedKeywords).toEqual(["claim"]);
+    expect(res.body.forwarded).toBe(true);
+    expect(res.body.forwardError).toBeNull();
+  });
+
+  it("surfaces a forwarding failure reason", async () => {
+    dbMock.enqueue([
+      detailRow({ forwarded: false, forwardError: "SMTP 535 auth failed" }),
+    ]);
+
+    const res = await request.get("/api/messages/1");
+
+    expect(res.body.forwardError).toBe("SMTP 535 auth failed");
+  });
+
+  it("surfaces the truncation flag", async () => {
+    dbMock.enqueue([detailRow({ bodyTruncated: true })]);
+
+    const res = await request.get("/api/messages/1");
+
+    expect(res.body.bodyTruncated).toBe(true);
+  });
+
+  it("reports a missing part as null", async () => {
+    dbMock.enqueue([detailRow({ bodyHtml: null, messageId: null })]);
+
+    const res = await request.get("/api/messages/1");
+
+    expect(res.body.bodyHtml).toBeNull();
+    expect(res.body.messageId).toBeNull();
+  });
+
+  it("returns HTML verbatim, leaving sanitization to the sandboxed renderer", async () => {
+    const hostile = '<script>alert(1)</script><img src="http://tracker/x">';
+    dbMock.enqueue([detailRow({ bodyHtml: hostile })]);
+
+    const res = await request.get("/api/messages/1");
+
+    expect(res.body.bodyHtml).toBe(hostile);
+  });
+
+  it("never leaks the internal account-deleted timestamp", async () => {
+    dbMock.enqueue([detailRow({ accountDeletedAt: NOW })]);
+
+    const res = await request.get("/api/messages/1");
+
+    expect(res.body.accountDeleted).toBe(true);
+    expect(res.body).not.toHaveProperty("accountDeletedAt");
+  });
+
+  it("returns 404 for an unknown id", async () => {
+    dbMock.enqueue([]);
+
+    const res = await request.get("/api/messages/999");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("NotFound");
+  });
+
+  it("rejects a malformed id", async () => {
+    const res = await request.get("/api/messages/nope");
+
+    expect(res.status).toBe(400);
+    expect(dbMock.countOf("select")).toBe(0);
+  });
+});
+
+describe("GET /api/healthz", () => {
+  it("reports ok when the database answers", async () => {
+    dbMock.enqueue({ rows: [{ ok: 1 }] });
+
+    const res = await request.get("/api/healthz");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: "ok" });
+  });
+});
+
+describe("unmatched API routes", () => {
+  it("answers with a JSON 404", async () => {
+    const res = await request.get("/api/does-not-exist");
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("NotFound");
+  });
+
+  it("answers with a JSON 404 for an unsupported method", async () => {
+    const res = await request.put("/api/accounts/7").send({});
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("NotFound");
+  });
+});

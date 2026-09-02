@@ -1,0 +1,57 @@
+# Render Blueprint for Email Watcher.
+#
+# One web service, not two: the Express server also serves the built SPA (see
+# artifacts/api-server/src/lib/static.ts). That is required for auth — the session
+# cookie is SameSite=Lax and would not be sent across two origins — and it keeps
+# the app inside Render's free allowance of 750 instance-hours against a ~730-hour
+# month, which a second always-on service would exceed.
+#
+# The database is deliberately NOT defined here. Render's free Postgres is deleted
+# 30 days after creation regardless of activity, which is unusable for a long-lived
+# archive. Point DATABASE_URL at Supabase (or Neon) instead; see replit.md.
+services:
+  - type: web
+    name: email-watcher
+    runtime: node
+    plan: free
+    # Free instances are only offered in a subset of regions; Oregon is the
+    # default and the safest choice.
+    region: oregon
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm run build:deploy
+    startCommand: pnpm run start
+    # Render pings this to decide the service is live. It runs `select 1`, so it
+    # doubles as database activity — which is why an UptimeRobot monitor pointed
+    # at this path both defeats the 15-minute idle spin-down and keeps a free
+    # Postgres from being paused for inactivity.
+    healthCheckPath: /api/healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Node 24 matches the local toolchain and the engines field.
+      - key: NODE_VERSION
+        value: "24"
+      # Supabase connection string (Transaction pooler, port 6543).
+      # Set in the Render dashboard — never commit it.
+      - key: DATABASE_URL
+        sync: false
+      # Supabase's transaction pooler multiplexes connections, so a large
+      # client-side pool wastes the project's connection budget. Render free gives
+      # 0.1 CPU / 512 MB, which does not need many either.
+      - key: DATABASE_POOL_MAX
+        value: "5"
+      # From: pnpm --filter @workspace/scripts run hash-password
+      - key: APP_PASSWORD_HASH
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      # Render terminates TLS at its proxy and forwards one hop, so the login
+      # rate limiter needs this to see real client IPs rather than the proxy's.
+      - key: TRUST_PROXY
+        value: "1"
+      # The SPA and API share this origin, so no cross-origin allowance is needed.
+      # Replace with your custom domain if you attach one.
+      - key: FRONTEND_ORIGINS
+        value: https://email-watcher.onrender.com
+      - key: LOG_LEVEL
+        value: info

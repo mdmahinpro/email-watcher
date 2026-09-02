@@ -1,0 +1,27 @@
+{
+  "name": "workspace",
+  "version": "0.0.0",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.10.0",
+  "scripts": {
+    "preinstall": "node ./scripts/preinstall.mjs",
+    "build": "pnpm run typecheck && pnpm -r --if-present run build",
+    "test": "pnpm -r --if-present run test",
+    "typecheck:libs": "tsc --build",
+    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
+    "build:deploy": "pnpm --filter @workspace/web run build && pnpm --filter @workspace/api-server run build",
+    "start": "pnpm --filter @workspace/api-server run start"
+  },
+  "private": true,
+  "devDependencies": {
+    "prettier": "^3.8.1",
+    "typescript": "~5.9.2"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-win32-x64-msvc": "^4.62.4",
+    "lightningcss-win32-x64-msvc": "^1.33.0"
+  }
+}

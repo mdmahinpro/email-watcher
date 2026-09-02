@@ -1,0 +1,1172 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: auth
+    description: Single-password access gate
+  - name: accounts
+    description: Email account management (IMAP/SMTP)
+  - name: messages
+    description: Matched messages
+  - name: inbox
+    description: Unfiltered mailbox archive
+  - name: settings
+    description: Application settings (keywords, forwarding)
+  - name: stats
+    description: Dashboard statistics
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /auth/session:
+    get:
+      operationId: getAuthSession
+      tags: [auth]
+      summary: Whether the caller holds a valid session
+      description: >-
+        Unauthenticated: used by the frontend on load to decide between the login
+        screen and the app. Never returns 401.
+      responses:
+        "200":
+          description: Session state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Exchange the app password for a session cookie
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginBody"
+      responses:
+        "200":
+          description: Signed in; a session cookie is set
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "401":
+          description: Wrong password
+        "429":
+          description: Too many attempts
+        "503":
+          description: No password configured on the server
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Clear the session cookie
+      responses:
+        "204":
+          description: Signed out
+
+  /accounts:
+    get:
+      operationId: listAccounts
+      tags: [accounts]
+      summary: List all configured email accounts
+      parameters:
+        - name: provider
+          in: query
+          required: false
+          description: Only return accounts created for this provider.
+          schema:
+            $ref: "#/components/schemas/AccountProvider"
+      responses:
+        "200":
+          description: List of accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EmailAccount"
+    post:
+      operationId: createAccount
+      tags: [accounts]
+      summary: Add a new email account (IMAP + SMTP)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAccountBody"
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailAccount"
+  /accounts/bulk:
+    post:
+      operationId: createAccountsBulk
+      tags: [accounts]
+      summary: Add several accounts that share one password and server config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkCreateAccountsBody"
+      responses:
+        "200":
+          description: Per-address outcome. Individual failures do not fail the request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkCreateResult"
+  /accounts/hostinger:
+    post:
+      operationId: createHostingerAccounts
+      tags: [accounts]
+      summary: Add Hostinger mailboxes using Hostinger's server defaults
+      description: >-
+        Server settings are filled in from Hostinger's published configuration,
+        so the request only carries mailboxes and passwords. Each mailbox may
+        supply its own password, or omit it to use the shared `password`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHostingerAccountsBody"
+      responses:
+        "200":
+          description: Per-mailbox outcome. Individual failures do not fail the request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkCreateResult"
+  /accounts/hostinger/defaults:
+    get:
+      operationId: getHostingerDefaults
+      tags: [accounts]
+      summary: Hostinger's documented IMAP and SMTP settings
+      responses:
+        "200":
+          description: Provider defaults
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HostingerDefaults"
+  /accounts/{id}:
+    patch:
+      operationId: updateAccount
+      tags: [accounts]
+      summary: Update an email account (credentials, endpoints, or active state)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAccountBody"
+      responses:
+        "200":
+          description: Updated account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailAccount"
+        "404":
+          description: Account not found
+    delete:
+      operationId: deleteAccount
+      tags: [accounts]
+      summary: Remove an email account
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+  /accounts/{id}/test:
+    post:
+      operationId: testAccount
+      tags: [accounts]
+      summary: Test the IMAP connection for an account
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Connection test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestResult"
+  /accounts/{id}/scan:
+    post:
+      operationId: scanAccount
+      tags: [accounts]
+      summary: Manually trigger an inbox scan for matching emails
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Scan result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanResult"
+
+  /messages:
+    get:
+      operationId: listMessages
+      tags: [messages]
+      summary: List matched messages (newest first)
+      parameters:
+        - name: accountId
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 500
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: Matched messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MatchedMessage"
+  /messages/{id}:
+    get:
+      operationId: getMessage
+      tags: [messages]
+      summary: One matched message, including its full body
+      description: >-
+        Bodies are excluded from the list endpoint because they are large; fetch
+        them one message at a time.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: The message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageDetail"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteMessage
+      tags: [messages]
+      summary: Delete a matched message from history
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /inbox:
+    get:
+      operationId: listInboxMessages
+      tags: [inbox]
+      summary: List archived mail from unfiltered mailboxes (newest first)
+      description: >-
+        Every message seen in a mailbox whose capture mode is `all`, with no
+        keyword test applied. Separate from `/messages`, which is the keyword
+        triage queue.
+      parameters:
+        - name: accountId
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: provider
+          in: query
+          required: false
+          description: Restrict to mailboxes of one provider.
+          schema:
+            $ref: "#/components/schemas/AccountProvider"
+        - name: search
+          in: query
+          required: false
+          description: >-
+            Case-insensitive substring match against subject, sender, and
+            snippet. Ad-hoc lookup, not a stored keyword.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 500
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: Archived messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InboxMessage"
+  /inbox/{id}:
+    get:
+      operationId: getInboxMessage
+      tags: [inbox]
+      summary: One archived message, including its full body
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: The message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageDetail"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteInboxMessage
+      tags: [inbox]
+      summary: Delete an archived message
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /settings:
+    get:
+      operationId: getSettings
+      tags: [settings]
+      summary: Get current settings (keywords, forward destination)
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppSettings"
+    put:
+      operationId: updateSettings
+      tags: [settings]
+      summary: Update settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSettingsBody"
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppSettings"
+
+  /stats/summary:
+    get:
+      operationId: getStatsSummary
+      tags: [stats]
+      summary: Dashboard summary stats
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsSummary"
+  /stats/keyword-breakdown:
+    get:
+      operationId: getKeywordBreakdown
+      tags: [stats]
+      summary: Counts of matches per keyword
+      responses:
+        "200":
+          description: Keyword breakdown
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/KeywordCount"
+  /stats/account-activity:
+    get:
+      operationId: getAccountActivity
+      tags: [stats]
+      summary: Match counts per account
+      responses:
+        "200":
+          description: Account activity
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountActivity"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    AuthSession:
+      type: object
+      properties:
+        authenticated:
+          type: boolean
+        authRequired:
+          description: >-
+            False when the server has no password configured. The UI shows a
+            setup warning instead of a login form in that case.
+          type: boolean
+      required:
+        - authenticated
+        - authRequired
+
+    LoginBody:
+      type: object
+      properties:
+        password:
+          type: string
+          minLength: 1
+      required:
+        - password
+
+    AccountProvider:
+      description: >-
+        Where an account's server settings came from. Provenance only: scanning
+        and forwarding treat every account identically.
+      type: string
+      enum:
+        - generic
+        - hostinger
+
+    CaptureMode:
+      description: >-
+        What a scan stores. `keywords` stores only keyword matches into
+        /messages and forwards them. `all` archives every arriving message into
+        /inbox with no keyword test and no forwarding.
+      type: string
+      enum:
+        - keywords
+        - all
+
+    HostingerDefaults:
+      type: object
+      properties:
+        imapHost:
+          type: string
+        imapPort:
+          type: integer
+        imapSecure:
+          type: boolean
+        smtpHost:
+          type: string
+        smtpPortSsl:
+          type: integer
+        smtpPortStartTls:
+          type: integer
+      required:
+        - imapHost
+        - imapPort
+        - imapSecure
+        - smtpHost
+        - smtpPortSsl
+        - smtpPortStartTls
+
+    EmailAccount:
+      type: object
+      properties:
+        id:
+          type: integer
+        label:
+          type: string
+        emailAddress:
+          type: string
+        provider:
+          $ref: "#/components/schemas/AccountProvider"
+        captureMode:
+          $ref: "#/components/schemas/CaptureMode"
+        imapHost:
+          type: string
+        imapPort:
+          type: integer
+        imapSecure:
+          type: boolean
+        smtpHost:
+          type: string
+        smtpPort:
+          type: integer
+        smtpSecure:
+          type: boolean
+        username:
+          type: string
+        active:
+          type: boolean
+        lastCheckedAt:
+          type: string
+          nullable: true
+        lastError:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required:
+        - id
+        - label
+        - emailAddress
+        - provider
+        - captureMode
+        - imapHost
+        - imapPort
+        - imapSecure
+        - smtpHost
+        - smtpPort
+        - smtpSecure
+        - username
+        - active
+        - createdAt
+
+    CreateHostingerAccountsBody:
+      description: >-
+        Hostinger mailboxes to monitor. IMAP and SMTP settings come from
+        Hostinger's defaults, so only mailboxes and passwords are supplied.
+      type: object
+      properties:
+        mailboxes:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/HostingerMailbox"
+        password:
+          description: >-
+            Fallback password used for any mailbox that does not carry its own.
+            Required unless every mailbox supplies a password.
+          type: string
+          minLength: 1
+        smtpMode:
+          description: >-
+            SSL on port 465 (Hostinger's default) or STARTTLS on port 587, which
+            Hostinger documents as the fallback when 465 is blocked.
+          type: string
+          enum:
+            - ssl
+            - starttls
+          default: ssl
+        captureMode:
+          description: >-
+            Defaults to `all` for Hostinger mailboxes: every arriving message is
+            archived into /inbox unfiltered. Set `keywords` to put a mailbox into
+            the keyword triage queue instead.
+          allOf:
+            - $ref: "#/components/schemas/CaptureMode"
+          default: all
+      required:
+        - mailboxes
+
+    HostingerMailbox:
+      type: object
+      properties:
+        emailAddress:
+          type: string
+          format: email
+        password:
+          description: Overrides the shared password for this mailbox only.
+          type: string
+          minLength: 1
+        label:
+          type: string
+          minLength: 1
+      required:
+        - emailAddress
+
+    CreateAccountBody:
+      type: object
+      properties:
+        label:
+          type: string
+          minLength: 1
+        emailAddress:
+          type: string
+          format: email
+        imapHost:
+          type: string
+          minLength: 1
+        imapPort:
+          type: integer
+          default: 993
+        imapSecure:
+          type: boolean
+          default: true
+        smtpHost:
+          type: string
+          minLength: 1
+        smtpPort:
+          type: integer
+          default: 465
+        smtpSecure:
+          type: boolean
+          default: true
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+      required:
+        - label
+        - emailAddress
+        - imapHost
+        - smtpHost
+        - username
+        - password
+
+    UpdateAccountBody:
+      description: >-
+        Partial update. Only the supplied fields are changed. Omit `password`
+        to keep the stored credential unchanged.
+      type: object
+      properties:
+        label:
+          type: string
+          minLength: 1
+        emailAddress:
+          type: string
+          format: email
+        imapHost:
+          type: string
+          minLength: 1
+        imapPort:
+          type: integer
+        imapSecure:
+          type: boolean
+        smtpHost:
+          type: string
+          minLength: 1
+        smtpPort:
+          type: integer
+        smtpSecure:
+          type: boolean
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+        active:
+          type: boolean
+        captureMode:
+          $ref: "#/components/schemas/CaptureMode"
+
+    BulkCreateAccountsBody:
+      description: >-
+        Create many accounts that share one password and one server
+        configuration. Each entry supplies only its own address; the username
+        defaults to the address unless an explicit username is given, and the
+        label defaults to the address.
+      type: object
+      properties:
+        accounts:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/BulkAccountEntry"
+        password:
+          type: string
+          minLength: 1
+        imapHost:
+          type: string
+          minLength: 1
+        imapPort:
+          type: integer
+          default: 993
+        imapSecure:
+          type: boolean
+          default: true
+        smtpHost:
+          type: string
+          minLength: 1
+        smtpPort:
+          type: integer
+          default: 465
+        smtpSecure:
+          type: boolean
+          default: true
+      required:
+        - accounts
+        - password
+        - imapHost
+        - smtpHost
+
+    BulkAccountEntry:
+      type: object
+      properties:
+        emailAddress:
+          type: string
+          format: email
+        label:
+          type: string
+          minLength: 1
+        username:
+          type: string
+          minLength: 1
+      required:
+        - emailAddress
+
+    BulkCreateResult:
+      type: object
+      properties:
+        created:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmailAccount"
+        failed:
+          type: array
+          items:
+            $ref: "#/components/schemas/BulkCreateFailure"
+      required:
+        - created
+        - failed
+
+    BulkCreateFailure:
+      type: object
+      properties:
+        emailAddress:
+          type: string
+        reason:
+          type: string
+      required:
+        - emailAddress
+        - reason
+
+    TestResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        message:
+          type: string
+      required:
+        - ok
+        - message
+
+    ScanResult:
+      type: object
+      properties:
+        scanned:
+          type: integer
+        matched:
+          description: >-
+            Keyword matches stored, for a `keywords` mailbox. Always 0 for an
+            `all` mailbox, which archives instead of matching.
+          type: integer
+        archived:
+          description: Messages archived, for an `all` mailbox.
+          type: integer
+        forwarded:
+          type: integer
+        message:
+          type: string
+      required:
+        - scanned
+        - matched
+        - archived
+        - forwarded
+        - message
+
+    MatchedMessage:
+      type: object
+      properties:
+        id:
+          type: integer
+        accountId:
+          type: integer
+        accountLabel:
+          description: >-
+            Account label as captured when the message was matched. Unchanged by
+            later renames or account removal.
+          type: string
+        accountEmail:
+          description: Account address as captured when the message was matched.
+          type: string
+        accountDeleted:
+          description: True when the originating account has since been removed.
+          type: boolean
+        messageUid:
+          type: string
+        messageId:
+          type: string
+          nullable: true
+        fromAddress:
+          type: string
+        toAddress:
+          type: string
+        subject:
+          type: string
+        snippet:
+          type: string
+        receivedAt:
+          type: string
+        matchedKeywords:
+          type: array
+          items:
+            type: string
+        forwarded:
+          type: boolean
+        forwardError:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required:
+        - id
+        - accountId
+        - accountLabel
+        - accountEmail
+        - accountDeleted
+        - messageUid
+        - fromAddress
+        - toAddress
+        - subject
+        - snippet
+        - receivedAt
+        - matchedKeywords
+        - forwarded
+        - createdAt
+
+    InboxMessage:
+      description: >-
+        An archived message from an unfiltered mailbox. Has no keyword or
+        forwarding fields: nothing was matched and nothing was relayed.
+      type: object
+      properties:
+        id:
+          type: integer
+        accountId:
+          type: integer
+        accountLabel:
+          description: >-
+            Account label as captured when the message was archived. Unchanged by
+            later renames or account removal.
+          type: string
+        accountEmail:
+          description: Account address as captured when the message was archived.
+          type: string
+        accountDeleted:
+          description: True when the originating account has since been removed.
+          type: boolean
+        messageUid:
+          type: string
+        messageId:
+          type: string
+          nullable: true
+        fromAddress:
+          type: string
+        toAddress:
+          type: string
+        subject:
+          type: string
+        snippet:
+          type: string
+        receivedAt:
+          type: string
+        createdAt:
+          type: string
+      required:
+        - id
+        - accountId
+        - accountLabel
+        - accountEmail
+        - accountDeleted
+        - messageUid
+        - fromAddress
+        - toAddress
+        - subject
+        - snippet
+        - receivedAt
+        - createdAt
+
+    MessageDetail:
+      description: >-
+        A single captured email with its full body. Shared by /messages/{id} and
+        /inbox/{id}: keyword fields are present only for a keyword match.
+      type: object
+      properties:
+        id:
+          type: integer
+        accountId:
+          type: integer
+        accountLabel:
+          description: >-
+            Account label as captured at the time. Unchanged by later renames or
+            account removal.
+          type: string
+        accountEmail:
+          type: string
+        accountDeleted:
+          type: boolean
+        messageUid:
+          type: string
+        messageId:
+          type: string
+          nullable: true
+        fromAddress:
+          type: string
+        toAddress:
+          type: string
+        subject:
+          type: string
+        snippet:
+          type: string
+        bodyText:
+          description: Full plain-text body, or null when the message had none.
+          type: string
+          nullable: true
+        bodyHtml:
+          description: >-
+            Full HTML body, or null. Untrusted: render only in a sandboxed frame,
+            never inline.
+          type: string
+          nullable: true
+        bodyTruncated:
+          description: True when the stored body was cut at the size cap.
+          type: boolean
+        receivedAt:
+          type: string
+        createdAt:
+          type: string
+        matchedKeywords:
+          description: Present only for a keyword-matched message.
+          type: array
+          items:
+            type: string
+        forwarded:
+          type: boolean
+        forwardError:
+          type: string
+          nullable: true
+      required:
+        - id
+        - accountId
+        - accountLabel
+        - accountEmail
+        - accountDeleted
+        - messageUid
+        - fromAddress
+        - toAddress
+        - subject
+        - snippet
+        - bodyTruncated
+        - receivedAt
+        - createdAt
+
+    AppSettings:
+      type: object
+      properties:
+        keywords:
+          type: array
+          items:
+            type: string
+        forwardToEmail:
+          type: string
+          nullable: true
+        pollIntervalSeconds:
+          type: integer
+        forwardingEnabled:
+          type: boolean
+        retainBodiesDays:
+          description: >-
+            Drop stored message bodies older than this many days, keeping the row
+            and its snippet. 0 keeps them forever.
+          type: integer
+        retainMessagesDays:
+          description: >-
+            Delete messages older than this many days outright. 0 keeps them
+            forever.
+          type: integer
+      required:
+        - keywords
+        - pollIntervalSeconds
+        - forwardingEnabled
+        - retainBodiesDays
+        - retainMessagesDays
+
+    UpdateSettingsBody:
+      type: object
+      properties:
+        keywords:
+          type: array
+          items:
+            type: string
+        forwardToEmail:
+          type: string
+          nullable: true
+        pollIntervalSeconds:
+          type: integer
+          minimum: 30
+        forwardingEnabled:
+          type: boolean
+        retainBodiesDays:
+          type: integer
+          minimum: 0
+          maximum: 3650
+        retainMessagesDays:
+          type: integer
+          minimum: 0
+          maximum: 3650
+
+    StatsSummary:
+      type: object
+      properties:
+        totalAccounts:
+          type: integer
+        activeAccounts:
+          type: integer
+        totalMatches:
+          type: integer
+        matchesLast24h:
+          type: integer
+        matchesLast7d:
+          type: integer
+        forwardedCount:
+          type: integer
+        archivedTotal:
+          description: Messages archived from unfiltered mailboxes.
+          type: integer
+        archivedLast24h:
+          type: integer
+        databaseBytes:
+          description: >-
+            Current database size, for watching a hosted free-tier quota. Null
+            when the host does not permit reading it.
+          type: integer
+          nullable: true
+        heartbeatDay:
+          description: >-
+            The date currently recorded by the daily liveness beat (YYYY-MM-DD),
+            or null before the first beat.
+          type: string
+          nullable: true
+      required:
+        - totalAccounts
+        - activeAccounts
+        - totalMatches
+        - matchesLast24h
+        - matchesLast7d
+        - forwardedCount
+        - archivedTotal
+        - archivedLast24h
+
+    KeywordCount:
+      type: object
+      properties:
+        keyword:
+          type: string
+        count:
+          type: integer
+      required:
+        - keyword
+        - count
+
+    AccountActivity:
+      type: object
+      properties:
+        accountId:
+          type: integer
+        label:
+          type: string
+        emailAddress:
+          type: string
+        matchCount:
+          type: integer
+        lastMatchAt:
+          type: string
+          nullable: true
+      required:
+        - accountId
+        - label
+        - emailAddress
+        - matchCount

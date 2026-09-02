@@ -1,0 +1,19 @@
+<!--
+  Favicon variant. Same mark as logo.svg with thicker strokes, larger radii, and
+  no badge gap ring, because at 16-32px the ring closes up into a smudge and thin
+  strokes disappear entirely.
+-->
+<svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Email Watcher">
+  <defs>
+    <linearGradient id="ew-fav" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="180" y2="180">
+      <stop offset="0" stop-color="#FF4356"/>
+      <stop offset="0.55" stop-color="#F12230"/>
+      <stop offset="1" stop-color="#B00F1C"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="180" height="180" rx="40" fill="url(#ew-fav)"/>
+
+  <rect x="28" y="50" width="124" height="80" rx="16" fill="#FFFFFF"/>
+  <path d="M42 66 L90 104 L138 66" stroke="#B00F1C" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
