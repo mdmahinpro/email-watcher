@@ -49,9 +49,11 @@ services:
       # rate limiter needs this to see real client IPs rather than the proxy's.
       - key: TRUST_PROXY
         value: "1"
-      # The SPA and API share this origin, so no cross-origin allowance is needed.
-      # Replace with your custom domain if you attach one.
-      - key: FRONTEND_ORIGINS
-        value: https://email-watcher.onrender.com
+      # The SPA and API share one origin, so no cross-origin allowance is needed
+      # for normal use. The service's real URL is trusted automatically from
+      # RENDER_EXTERNAL_URL, which Render injects — do not hardcode it here,
+      # because a taken service name gets a suffix (email-watcher-k01d) and a
+      # stale value would lock the app out of its own API.
+      # Add entries only for genuinely separate frontends.
       - key: LOG_LEVEL
         value: info
