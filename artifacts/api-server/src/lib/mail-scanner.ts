@@ -51,6 +51,29 @@ const SCAN_CONCURRENCY = 4;
  */
 const inFlightScans = new Map<number, Promise<ScanOutcome>>();
 
+/**
+ * TLS options for a legacy shared-hosting mail server.
+ *
+ * Two concessions, deliberately behind one flag:
+ *
+ * - `rejectUnauthorized: false` accepts a certificate that does not match the
+ *   hostname, which is what shared cPanel hosting serves (one certificate for the
+ *   provider's own name across every customer domain). Also covers an expired
+ *   certificate.
+ * - `minVersion: "TLSv1"` allows TLS 1.0/1.1. Node 24 requires 1.2 by default and
+ *   fails with `ssl_choose_client_version: unsupported protocol`, which is not a
+ *   certificate problem at all but occurs on exactly the same class of neglected
+ *   server.
+ *
+ * They are combined because an operator cannot act on the distinction: both mean
+ * "this is an old shared host", and a second toggle would only add a decision
+ * with no separate remedy.
+ */
+const RELAXED_TLS = {
+  rejectUnauthorized: false,
+  minVersion: "TLSv1" as const,
+};
+
 function createImapClient(account: EmailAccount): ImapFlow {
   const client = new ImapFlow({
     host: account.imapHost,
@@ -59,12 +82,8 @@ function createImapClient(account: EmailAccount): ImapFlow {
     auth: { user: account.username, pass: account.password },
     logger: false,
     ...IMAP_TIMEOUTS,
-    // Shared cPanel hosting routinely serves the provider's own certificate on
-    // mail.<customer-domain>, so a strict client rejects a perfectly working
-    // mailbox. Opting out is per-account and deliberate; see the column comment.
-    ...(account.allowInvalidCert
-      ? { tls: { rejectUnauthorized: false } }
-      : {}),
+    // Opting out of strict TLS is per-account and deliberate; see RELAXED_TLS.
+    ...(account.allowInvalidCert ? { tls: RELAXED_TLS } : {}),
   });
 
   // ImapFlow is an EventEmitter that emits 'error' asynchronously (for example
@@ -98,7 +117,13 @@ const CERT_ERROR_CODES = [
   "ERR_TLS_CERT_ALTNAME_UNSUPPORTED",
 ];
 
-/** Turn a raw connection failure into something that names the fix. */
+/**
+ * Turn a raw connection failure into something that names the fix.
+ *
+ * Each branch maps to a genuinely different remedy. Lumping them together — or
+ * suggesting the TLS toggle for a DNS failure — sends an operator down the wrong
+ * path, which is worse than showing the raw error.
+ */
 export function describeConnectionError(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
   const code =
@@ -106,16 +131,69 @@ export function describeConnectionError(err: unknown): string {
       ? String((err as { code: unknown }).code)
       : "";
 
-  const looksLikeCert =
-    CERT_ERROR_CODES.includes(code) ||
-    /altname|self.signed|certificate/i.test(message);
-
-  if (looksLikeCert) {
+  // The host does not exist. No client setting can help; the hostname is wrong.
+  if (code === "ENOTFOUND" || /ENOTFOUND|getaddrinfo/i.test(message)) {
     return (
-      `${message} — the server's TLS certificate does not match this hostname. ` +
-      "This is normal on shared cPanel hosting. Enable \"Accept mismatched TLS " +
-      "certificate\" on this account, or use the hostname the certificate is " +
-      "issued for."
+      `${message} — that hostname does not exist in DNS. This domain does not ` +
+      "use mail.<domain>; find the real mail server (often the domain itself, " +
+      "or check the MX record) and set it on this account."
+    );
+  }
+
+  // Node refuses TLS 1.0/1.1 by default. Not a certificate problem, but the same
+  // relaxed-TLS switch enables it.
+  if (
+    /unsupported protocol|ssl_choose_client_version|wrong version number|no protocols available/i.test(
+      message,
+    )
+  ) {
+    return (
+      `${message} — this server only speaks an old TLS version that is ` +
+      'disabled by default. Enable "Accept mismatched TLS certificate" on this ' +
+      "account, which also permits legacy TLS."
+    );
+  }
+
+  // The handshake was cut. Commonly a shared host that rate-limits repeated
+  // failed logins, or one whose implicit-TLS port is broken while STARTTLS on 143
+  // works. Verified on a real host: 993 reset every attempt, 143 authenticated.
+  if (code === "ECONNRESET" || /socket hang up|econnreset/i.test(message)) {
+    return (
+      `${message} — the server closed the connection during the handshake. Try ` +
+      "port 143 with SSL/TLS turned off (STARTTLS), which some shared hosts " +
+      "accept when port 993 does not. Repeated failed logins can also trigger a " +
+      "temporary block, so wait a few minutes before retrying."
+    );
+  }
+
+  if (code === "ETIMEDOUT" || /timeout|required time/i.test(message)) {
+    return (
+      `${message} — the server did not answer in time. Check the host and port, ` +
+      "and whether the provider blocks IMAP from outside its own network."
+    );
+  }
+
+  if (
+    CERT_ERROR_CODES.includes(code) ||
+    /altname|self.signed|certificate/i.test(message)
+  ) {
+    const expired = /expired/i.test(message);
+    return (
+      `${message} — the server's TLS certificate is ` +
+      (expired ? "expired" : "issued for a different hostname") +
+      ". This is normal on shared cPanel hosting. Enable \"Accept mismatched " +
+      'TLS certificate" on this account.'
+    );
+  }
+
+  if (
+    code === "AUTHENTICATIONFAILED" ||
+    /authentication failed|invalid credentials|login failed/i.test(message)
+  ) {
+    return (
+      `${message} — the server rejected these credentials. Check the password, ` +
+      "and note that some providers require the full email address as the " +
+      "username, or a separate app password for IMAP."
     );
   }
 
@@ -231,11 +309,8 @@ async function forwardPending(
     secure: account.smtpSecure,
     auth: { user: account.username, pass: account.password },
     ...SMTP_TIMEOUTS,
-    // Same certificate situation as IMAP: one shared host serving many customer
-    // domains presents a certificate for its own name.
-    ...(account.allowInvalidCert
-      ? { tls: { rejectUnauthorized: false } }
-      : {}),
+    // Same legacy-host situation as IMAP; see RELAXED_TLS.
+    ...(account.allowInvalidCert ? { tls: RELAXED_TLS } : {}),
   });
 
   let forwarded = 0;

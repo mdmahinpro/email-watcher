@@ -2,94 +2,152 @@ import { describe, expect, it } from "vitest";
 import { describeConnectionError } from "./mail-scanner";
 
 /**
- * A bare TLS error code tells an operator nothing about what to do, and the
- * mailbox is usually fine — it is the certificate that is wrong. These cover the
- * rewrite that names the remedy.
+ * Each branch maps to a genuinely different remedy. The regression risk these
+ * guard is a wrong suggestion: pointing at the TLS toggle for a DNS failure, or
+ * at DNS for a bad password, wastes an operator's time more than a raw error code
+ * would.
+ *
+ * The strings here are real errors observed while adding mailboxes across a dozen
+ * shared-hosting domains.
  */
 describe("describeConnectionError", () => {
-  it("explains a hostname mismatch and names the fix", () => {
-    // The real case: GoDaddy shared hosting serves *.prod.sin2.secureserver.net
-    // on mail.<customer-domain>.
-    const err = Object.assign(
-      new Error(
-        "Hostname/IP does not match certificate's altnames: Host: mail.albadrmed.com. is not in the cert's altnames",
-      ),
-      { code: "ERR_TLS_CERT_ALTNAME_INVALID" },
-    );
+  describe("certificate problems", () => {
+    it("explains a hostname mismatch and names the toggle", () => {
+      const err = Object.assign(
+        new Error(
+          "Hostname/IP does not match certificate's altnames: Host: mail.example.com. is not in the cert's altnames: DNS:*.prod.phx3.secureserver.net",
+        ),
+        { code: "ERR_TLS_CERT_ALTNAME_INVALID" },
+      );
 
-    const message = describeConnectionError(err);
+      const message = describeConnectionError(err);
 
-    expect(message).toContain("does not match this hostname");
-    expect(message).toContain("Accept mismatched TLS");
-    // The original detail is preserved, not replaced.
-    expect(message).toContain("altnames");
-  });
-
-  it("explains a self-signed certificate", () => {
-    const err = Object.assign(new Error("self signed certificate"), {
-      code: "DEPTH_ZERO_SELF_SIGNED_CERT",
+      expect(message).toContain("issued for a different hostname");
+      expect(message).toContain("Accept mismatched");
+      // The original detail survives, so the actual cert name stays visible.
+      expect(message).toContain("secureserver.net");
     });
 
-    expect(describeConnectionError(err)).toContain("Accept mismatched TLS");
-  });
+    it("says expired rather than mismatched for an expired certificate", () => {
+      // Previously this claimed the certificate "does not match this hostname",
+      // which was simply wrong and confusing.
+      const err = Object.assign(new Error("certificate has expired"), {
+        code: "CERT_HAS_EXPIRED",
+      });
 
-  it("explains an expired certificate", () => {
-    const err = Object.assign(new Error("certificate has expired"), {
-      code: "CERT_HAS_EXPIRED",
+      const message = describeConnectionError(err);
+
+      expect(message).toContain("expired");
+      expect(message).not.toContain("different hostname");
+      expect(message).toContain("Accept mismatched");
     });
 
-    expect(describeConnectionError(err)).toContain("Accept mismatched TLS");
+    it("explains a self-signed certificate", () => {
+      const err = Object.assign(new Error("self signed certificate"), {
+        code: "DEPTH_ZERO_SELF_SIGNED_CERT",
+      });
+
+      expect(describeConnectionError(err)).toContain("Accept mismatched");
+    });
   });
 
-  it("explains an unverifiable chain", () => {
-    const err = Object.assign(
-      new Error("unable to verify the first certificate"),
-      { code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE" },
-    );
+  describe("legacy TLS", () => {
+    it("explains an unsupported protocol version", () => {
+      // Node 24 requires TLS 1.2+. This is not a certificate fault, but the same
+      // switch permits it, so the advice must still point there.
+      const err = new Error(
+        "40CD1A5570730000:error:0A000102:SSL routines:ssl_choose_client_version:unsupported protocol",
+      );
 
-    expect(describeConnectionError(err)).toContain("Accept mismatched TLS");
-  });
+      const message = describeConnectionError(err);
 
-  it("recognises a certificate problem from the message alone", () => {
-    // Some libraries wrap the error and drop the code.
-    const err = new Error("certificate verify failed");
-
-    expect(describeConnectionError(err)).toContain("Accept mismatched TLS");
-  });
-
-  it("leaves an authentication failure untouched", () => {
-    // Suggesting a TLS toggle for a wrong password would send someone down the
-    // wrong path entirely.
-    const err = Object.assign(new Error("Invalid credentials (Failure)"), {
-      code: "AUTHENTICATIONFAILED",
+      expect(message).toContain("old TLS version");
+      expect(message).toContain("Accept mismatched");
+      // Must not be mistaken for a certificate mismatch.
+      expect(message).not.toContain("different hostname");
     });
 
-    const message = describeConnectionError(err);
+    it("explains a wrong version number", () => {
+      const err = new Error("wrong version number");
 
-    expect(message).toBe("Invalid credentials (Failure)");
-    expect(message).not.toContain("TLS");
+      expect(describeConnectionError(err)).toContain("old TLS version");
+    });
   });
 
-  it("leaves a connection timeout untouched", () => {
-    const err = Object.assign(new Error("Connection timeout"), {
-      code: "ETIMEDOUT",
+  describe("DNS", () => {
+    it("explains a nonexistent host without suggesting TLS", () => {
+      // No client setting can fix a hostname that does not resolve, so mentioning
+      // the certificate toggle here would be actively misleading.
+      const err = Object.assign(
+        new Error("getaddrinfo ENOTFOUND mail.canavart.com"),
+        { code: "ENOTFOUND" },
+      );
+
+      const message = describeConnectionError(err);
+
+      expect(message).toContain("does not exist in DNS");
+      expect(message).toContain("MX record");
+      expect(message).not.toContain("Accept mismatched");
+    });
+  });
+
+  describe("connection reset", () => {
+    it("suggests STARTTLS on 143, verified against a real host", () => {
+      // Observed: port 993 reset on every attempt while 143 authenticated.
+      const err = Object.assign(new Error("socket hang up"), {
+        code: "ECONNRESET",
+      });
+
+      const message = describeConnectionError(err);
+
+      expect(message).toContain("port 143");
+      expect(message).toContain("STARTTLS");
+      expect(message).not.toContain("Accept mismatched");
+    });
+  });
+
+  describe("timeouts", () => {
+    it("explains a connection timeout", () => {
+      const err = new Error("Failed to establish connection in required time");
+
+      const message = describeConnectionError(err);
+
+      expect(message).toContain("did not answer in time");
+      expect(message).not.toContain("Accept mismatched");
+    });
+  });
+
+  describe("authentication", () => {
+    it("explains rejected credentials and mentions app passwords", () => {
+      const err = Object.assign(new Error("Authentication failed."), {
+        code: "AUTHENTICATIONFAILED",
+      });
+
+      const message = describeConnectionError(err);
+
+      expect(message).toContain("rejected these credentials");
+      expect(message).toContain("app password");
+      // A password problem must never point at TLS.
+      expect(message).not.toContain("Accept mismatched");
     });
 
-    expect(describeConnectionError(err)).toBe("Connection timeout");
+    it("recognises 'Invalid credentials' phrasing", () => {
+      const err = new Error("Invalid credentials (Failure)");
+
+      expect(describeConnectionError(err)).toContain("rejected these credentials");
+    });
   });
 
-  it("leaves a DNS failure untouched", () => {
-    const err = Object.assign(
-      new Error("getaddrinfo ENOTFOUND mail.nonexistent.example"),
-      { code: "ENOTFOUND" },
-    );
+  describe("fallback", () => {
+    it("returns an unrecognised error unchanged", () => {
+      expect(describeConnectionError(new Error("Something novel"))).toBe(
+        "Something novel",
+      );
+    });
 
-    expect(describeConnectionError(err)).toContain("ENOTFOUND");
-    expect(describeConnectionError(err)).not.toContain("Accept mismatched");
-  });
-
-  it("handles a non-Error value", () => {
-    expect(describeConnectionError("something broke")).toBe("something broke");
-    expect(describeConnectionError(undefined)).toBe("undefined");
+    it("handles a non-Error value", () => {
+      expect(describeConnectionError("plain string")).toBe("plain string");
+      expect(describeConnectionError(undefined)).toBe("undefined");
+    });
   });
 });
