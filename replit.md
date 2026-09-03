@@ -213,8 +213,33 @@ Steps:
    This is load-bearing, not optional: Render stops a free web service after 15
    minutes without inbound traffic, and a stopped container runs no `setInterval`,
    so mailbox polling would silently cease. `/api/healthz` is outside the auth
-   gate for exactly this reason, and it runs `select 1`, so the same ping also
-   counts as database activity.
+   gate for exactly this reason.
+
+   Use monitor type **HTTP(s)**, interval **5 minutes**, and set the keyword or
+   expected status to 200. Do not point the monitor at `/api/readyz`: that one
+   returns 503 while the database is down, which would page you for something the
+   app recovers from on its own.
+
+### Diagnosing a deployment
+
+`/api/healthz` is public and self-describing, so a broken deployment can be
+diagnosed without dashboard access:
+
+```json
+{ "status": "ok", "database": "ok", "databaseLatencyMs": 210,
+  "databaseTarget": "supabase-pooler", "databasePort": 6543 }
+```
+
+- `database: "unreachable"` with `databaseTarget: "supabase-direct-ipv6-only"` —
+  the direct Supabase host is IPv6-only and Render has no IPv6 egress. Switch to
+  the pooler string.
+- `databasePort` that is neither 6543 nor 5432 — something other than a Postgres
+  port is in `DATABASE_URL`. The app's own `PORT` getting pasted there produces a
+  silent connection timeout; `databaseWarning` says so explicitly.
+- `databaseTarget: "unconfigured"` — `DATABASE_URL` is not set at all.
+
+It reports a *category*, never the raw host, because the direct Supabase hostname
+embeds the project ref and this endpoint is unauthenticated.
 
 ### Keeping the database alive
 

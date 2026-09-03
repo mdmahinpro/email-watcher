@@ -53,7 +53,31 @@ function warnAboutIpv6OnlyHost(host: string): void {
   );
 }
 
+/**
+ * Ports a Postgres server is actually reached on: 5432 is the standard listener
+ * and Supabase's session pooler, 6543 its transaction pooler.
+ *
+ * Anything else is far more likely a paste error than real configuration. An
+ * app's own HTTP port ending up here produces a connection timeout with no
+ * indication of the cause, so say so loudly at startup.
+ */
+function warnAboutUnusualPort(host: string, port: number): void {
+  const isLocal =
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host.endsWith(".local");
+  if (isLocal || port === 5432 || port === 6543) return;
+
+  console.warn(
+    `[db] WARNING: port ${port} is not a Postgres port. Expected 6543 for ` +
+      "Supabase's transaction pooler or 5432 for its session pooler. Check that " +
+      "the app's own PORT was not pasted into DATABASE_URL.",
+  );
+}
+
 warnAboutIpv6OnlyHost(parsed.hostname);
+warnAboutUnusualPort(parsed.hostname, Number(parsed.port) || 5432);
 
 /**
  * Local development runs Postgres on loopback without TLS; every hosted
