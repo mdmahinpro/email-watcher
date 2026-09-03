@@ -405,6 +405,28 @@ export const ScanAllAccountsResponse = zod.object({
 });
 
 /**
+ * Soft-deletes each account, exactly as `DELETE /accounts/{id}` does, so all matched and archived messages are retained and stay attributable.
+POST rather than DELETE with a body: request bodies on DELETE are widely dropped by proxies and are not reliably readable.
+ * @summary Remove several accounts at once
+ */
+export const deleteAccountsBulkBodyIdsMax = 200;
+
+export const DeleteAccountsBulkBody = zod.object({
+  ids: zod.array(zod.number()).min(1).max(deleteAccountsBulkBodyIdsMax),
+});
+
+export const DeleteAccountsBulkResponse = zod.object({
+  deleted: zod
+    .array(zod.number())
+    .describe("Ids that were live and are now removed."),
+  notFound: zod
+    .array(zod.number())
+    .describe(
+      "Ids that did not match a live account, because they never existed or were already removed. Reported rather than treated as an error, since the end state is the one that was asked for.",
+    ),
+});
+
+/**
  * @summary Update an email account (credentials, endpoints, or active state)
  */
 export const UpdateAccountParams = zod.object({

@@ -10,6 +10,7 @@ import {
   useUpdateAccount,
   useTestAllAccounts,
   useScanAllAccounts,
+  useDeleteAccountsBulk,
   getListMessagesQueryKey,
   getGetStatsSummaryQueryKey,
   getGetAccountActivityQueryKey,
@@ -41,6 +42,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
@@ -177,6 +179,7 @@ export default function Accounts() {
     | { kind: "scan"; data: BatchScanResult }
     | null
   >(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -302,6 +305,48 @@ export default function Accounts() {
     id: number,
   ) => mutation.isPending && mutation.variables?.id === id;
 
+  // Derived, not raw: a refetch can drop an account that is still in selectedIds
+  // (removed in another tab, or filtered out). Reading the selection through the
+  // visible list keeps the count, the names shown in the confirmation, and the ids
+  // sent to the server in agreement, and it self-heals without an effect.
+  const selectedAccounts = accountsList.filter((a) => selectedIds.has(a.id));
+  const selectedCount = selectedAccounts.length;
+
+  const toggleSelected = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const selectAll = () =>
+    setSelectedIds(new Set(accountsList.map((a) => a.id)));
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const deleteBulk = useDeleteAccountsBulk({
+    mutation: {
+      onSuccess: (data) => {
+        toast({
+          title: `Removed ${data.deleted.length} account${data.deleted.length === 1 ? "" : "s"}`,
+          description:
+            data.notFound.length > 0
+              ? `${data.notFound.length} were already removed. Matched messages were kept.`
+              : "Their matched messages were kept in history.",
+        });
+        clearSelection();
+        invalidateAfterScan();
+      },
+      onError: (err) => {
+        toast({
+          title: "Failed to remove accounts",
+          description: err.message,
+          variant: "destructive",
+        });
+      },
+    },
+  });
+
   const testAll = useTestAllAccounts({
     mutation: {
       onSuccess: (data) => {
@@ -410,6 +455,95 @@ export default function Accounts() {
         </div>
       ) : null}
 
+      {/* Selection bar.
+          Sticky at the top, not the bottom: the toast viewport is bottom-anchored
+          on mobile, and a bottom bar would sit under it. `top-14` clears the
+          mobile header, which is sticky at that height. */}
+      {selectedCount > 0 ? (
+        <div className="sticky top-14 z-30 md:top-0">
+          <div className="pin-card flex flex-wrap items-center justify-between gap-3 border border-sidebar-primary/40 p-3 sm:p-4">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="text-sm font-semibold text-foreground">
+                {selectedCount} selected
+              </span>
+              <button
+                type="button"
+                onClick={selectAll}
+                className="text-xs font-medium text-sidebar-primary hover:underline"
+              >
+                Select all {accountsList.length}
+              </button>
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="text-xs font-medium text-muted-foreground hover:underline"
+              >
+                Clear
+              </button>
+            </div>
+
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={deleteBulk.isPending}
+                  className="rounded-full text-destructive hover:text-destructive"
+                >
+                  <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                  {deleteBulk.isPending
+                    ? "Removing..."
+                    : `Remove ${selectedCount}`}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle className="font-bold">
+                    Remove {selectedCount} account
+                    {selectedCount === 1 ? "" : "s"}?
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    They will stop being monitored and disappear from this list.
+                    Their matched and archived messages stay in history and remain
+                    attributed to them. To stop monitoring temporarily, pause
+                    instead.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                {/* Naming them prevents removing the wrong batch, which is the
+                    real risk once a selection spans several screens. */}
+                <div className="max-h-40 overflow-y-auto rounded-xl border border-white/10 bg-black/20 p-2.5">
+                  <ul className="space-y-1">
+                    {selectedAccounts.map((a) => (
+                        <li
+                          key={a.id}
+                          className="pin-break font-mono text-xs text-muted-foreground"
+                        >
+                          {a.emailAddress}
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+                <AlertDialogFooter>
+                  <AlertDialogCancel className="rounded-full">
+                    Cancel
+                  </AlertDialogCancel>
+                  <AlertDialogAction
+                    className="rounded-full bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    onClick={() =>
+                      deleteBulk.mutate({
+                        data: { ids: selectedAccounts.map((a) => a.id) },
+                      })
+                    }
+                  >
+                    Remove {selectedCount}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+        </div>
+      ) : null}
+
       {/* Account Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {isLoading ? (
@@ -428,18 +562,33 @@ export default function Accounts() {
           accountsList.map((account) => {
             const status = statusOf(account);
             const badge = STATUS_BADGE[status];
+            const isSelected = selectedIds.has(account.id);
             return (
               <div
                 key={account.id}
-                className="pin-card flex flex-col overflow-hidden"
+                className={`pin-card flex flex-col overflow-hidden ${
+                  isSelected ? "ring-2 ring-sidebar-primary/60" : ""
+                }`}
               >
                 <div className="p-4 pb-3 sm:p-5 sm:pb-4">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2.5">
-                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary/10">
-                          <Server className="h-4 w-4 text-sidebar-primary" />
-                        </div>
+                        {/* Occupies the slot the decorative server icon had: that
+                            icon conveyed nothing, and a 44px label makes the
+                            checkbox reachable on touch. */}
+                        <label
+                          className="-m-2 flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center p-2"
+                          title={
+                            isSelected ? "Deselect account" : "Select account"
+                          }
+                        >
+                          <Checkbox
+                            checked={isSelected}
+                            onCheckedChange={() => toggleSelected(account.id)}
+                            aria-label={`Select ${account.emailAddress}`}
+                          />
+                        </label>
                         <h3 className="min-w-0 truncate text-sm font-semibold">
                           {account.label}
                         </h3>

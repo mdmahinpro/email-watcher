@@ -118,6 +118,9 @@ See `.env.example` for the Supabase connection-string format.
   - `PATCH` is a partial update; omit `password` to keep the stored credential,
     and use `active` to pause/resume monitoring
   - `DELETE` is a soft delete; matched messages are retained
+- `POST /accounts/delete-bulk` — remove several accounts in one atomic statement,
+  soft-deleted the same way. Ids that matched no live account are reported as
+  `notFound` rather than erroring, since the requested end state holds either way
 - `POST /accounts/bulk` — create many accounts in one request. Server settings
   default to `mail.<domain>` derived from each address, so a batch spanning many
   domains works without naming a host; an explicit `imapHost`/`smtpHost` overrides

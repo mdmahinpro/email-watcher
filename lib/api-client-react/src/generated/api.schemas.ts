@@ -347,6 +347,21 @@ export interface BatchScanResult {
   results: AccountScanOutcome[];
 }
 
+export interface DeleteAccountsBulkBody {
+  /**
+   * @minItems 1
+   * @maxItems 200
+   */
+  ids: number[];
+}
+
+export interface BulkDeleteResult {
+  /** Ids that were live and are now removed. */
+  deleted: number[];
+  /** Ids that did not match a live account, because they never existed or were already removed. Reported rather than treated as an error, since the end state is the one that was asked for. */
+  notFound: number[];
+}
+
 export interface AppSettings {
   keywords: string[];
   forwardToEmail?: string | null;

@@ -366,6 +366,106 @@ describe("PATCH /api/accounts/:id", () => {
   });
 });
 
+describe("POST /api/accounts/delete-bulk", () => {
+  it("soft-deletes every id, preserving message history", async () => {
+    // A hard delete would destroy matched and archived messages that reference
+    // these rows, so this must be an UPDATE just like the single-account route.
+    dbMock.enqueue([{ id: 1 }, { id: 2 }, { id: 3 }]);
+
+    const res = await request
+      .post("/api/accounts/delete-bulk")
+      .send({ ids: [1, 2, 3] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toEqual([1, 2, 3]);
+    expect(res.body.notFound).toEqual([]);
+    expect(dbMock.countOf("delete")).toBe(0);
+    expect(dbMock.countOf("update")).toBe(1);
+
+    const [patch] = dbMock.argsOf("set") as [Record<string, unknown>];
+    expect(patch["deletedAt"]).toBeInstanceOf(Date);
+    // Deactivated too, so the scheduler stops polling immediately.
+    expect(patch["active"]).toBe(false);
+  });
+
+  it("uses one statement, so a partial failure cannot half-apply", async () => {
+    dbMock.enqueue([{ id: 1 }, { id: 2 }]);
+
+    await request.post("/api/accounts/delete-bulk").send({ ids: [1, 2] });
+
+    expect(dbMock.countOf("update")).toBe(1);
+  });
+
+  it("reports ids that matched no live account", async () => {
+    // Already removed, or never existed. The requested end state holds either
+    // way, so this is reported rather than treated as an error.
+    dbMock.enqueue([{ id: 1 }]);
+
+    const res = await request
+      .post("/api/accounts/delete-bulk")
+      .send({ ids: [1, 999] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toEqual([1]);
+    expect(res.body.notFound).toEqual([999]);
+  });
+
+  it("de-duplicates repeated ids", async () => {
+    // Otherwise a repeated id could appear in both result lists at once.
+    dbMock.enqueue([{ id: 5 }]);
+
+    const res = await request
+      .post("/api/accounts/delete-bulk")
+      .send({ ids: [5, 5, 5] });
+
+    expect(res.body.deleted).toEqual([5]);
+    expect(res.body.notFound).toEqual([]);
+  });
+
+  it("rejects an empty id list", async () => {
+    const res = await request.post("/api/accounts/delete-bulk").send({ ids: [] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("ValidationError");
+    expect(dbMock.countOf("update")).toBe(0);
+  });
+
+  it("rejects a missing id list", async () => {
+    const res = await request.post("/api/accounts/delete-bulk").send({});
+
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a non-numeric id", async () => {
+    const res = await request
+      .post("/api/accounts/delete-bulk")
+      .send({ ids: [1, "two"] });
+
+    expect(res.status).toBe(400);
+    expect(dbMock.countOf("update")).toBe(0);
+  });
+
+  it("rejects a batch beyond the documented maximum", async () => {
+    const res = await request
+      .post("/api/accounts/delete-bulk")
+      .send({ ids: Array.from({ length: 201 }, (_, i) => i + 1) });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("is not shadowed by the /accounts/:id route", async () => {
+    // "delete-bulk" would parse as an id if the routes were declared the other
+    // way round, giving a confusing 400 about a malformed id.
+    dbMock.enqueue([{ id: 1 }]);
+
+    const res = await request
+      .post("/api/accounts/delete-bulk")
+      .send({ ids: [1] });
+
+    expect(res.status).toBe(200);
+  });
+});
+
 describe("POST /api/accounts/test-all", () => {
   it("tests every account and summarises the outcome", async () => {
     // Two accounts; the scanner mock is not installed here, so the real

@@ -228,6 +228,31 @@ paths:
               schema:
                 $ref: "#/components/schemas/BatchScanResult"
 
+  /accounts/delete-bulk:
+    post:
+      operationId: deleteAccountsBulk
+      tags: [accounts]
+      summary: Remove several accounts at once
+      description: >-
+        Soft-deletes each account, exactly as `DELETE /accounts/{id}` does, so all
+        matched and archived messages are retained and stay attributable.
+
+        POST rather than DELETE with a body: request bodies on DELETE are widely
+        dropped by proxies and are not reliably readable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteAccountsBulkBody"
+      responses:
+        "200":
+          description: Which ids were removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkDeleteResult"
+
   /accounts/{id}:
     patch:
       operationId: updateAccount
@@ -1243,6 +1268,38 @@ components:
         - archived
         - forwarded
         - message
+
+    DeleteAccountsBulkBody:
+      type: object
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            type: integer
+      required:
+        - ids
+
+    BulkDeleteResult:
+      type: object
+      properties:
+        deleted:
+          description: Ids that were live and are now removed.
+          type: array
+          items:
+            type: integer
+        notFound:
+          description: >-
+            Ids that did not match a live account, because they never existed or
+            were already removed. Reported rather than treated as an error, since
+            the end state is the one that was asked for.
+          type: array
+          items:
+            type: integer
+      required:
+        - deleted
+        - notFound
 
     AppSettings:
       type: object

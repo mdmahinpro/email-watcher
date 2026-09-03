@@ -24,8 +24,10 @@ import type {
   BatchTestResult,
   BulkCreateAccountsBody,
   BulkCreateResult,
+  BulkDeleteResult,
   CreateAccountBody,
   CreateHostingerAccountsBody,
+  DeleteAccountsBulkBody,
   EmailAccount,
   HealthStatus,
   HostingerDefaults,
@@ -992,6 +994,94 @@ export const useScanAllAccounts = <
   TContext
 > => {
   return useMutation(getScanAllAccountsMutationOptions(options));
+};
+
+/**
+ * Soft-deletes each account, exactly as `DELETE /accounts/{id}` does, so all matched and archived messages are retained and stay attributable.
+POST rather than DELETE with a body: request bodies on DELETE are widely dropped by proxies and are not reliably readable.
+ * @summary Remove several accounts at once
+ */
+export const getDeleteAccountsBulkUrl = () => {
+  return `/api/accounts/delete-bulk`;
+};
+
+export const deleteAccountsBulk = async (
+  deleteAccountsBulkBody: DeleteAccountsBulkBody,
+  options?: RequestInit,
+): Promise<BulkDeleteResult> => {
+  return customFetch<BulkDeleteResult>(getDeleteAccountsBulkUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(deleteAccountsBulkBody),
+  });
+};
+
+export const getDeleteAccountsBulkMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteAccountsBulk>>,
+    TError,
+    { data: BodyType<DeleteAccountsBulkBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteAccountsBulk>>,
+  TError,
+  { data: BodyType<DeleteAccountsBulkBody> },
+  TContext
+> => {
+  const mutationKey = ["deleteAccountsBulk"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteAccountsBulk>>,
+    { data: BodyType<DeleteAccountsBulkBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return deleteAccountsBulk(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteAccountsBulkMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteAccountsBulk>>
+>;
+export type DeleteAccountsBulkMutationBody = BodyType<DeleteAccountsBulkBody>;
+export type DeleteAccountsBulkMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Remove several accounts at once
+ */
+export const useDeleteAccountsBulk = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteAccountsBulk>>,
+    TError,
+    { data: BodyType<DeleteAccountsBulkBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteAccountsBulk>>,
+  TError,
+  { data: BodyType<DeleteAccountsBulkBody> },
+  TContext
+> => {
+  return useMutation(getDeleteAccountsBulkMutationOptions(options));
 };
 
 /**

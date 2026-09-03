@@ -11,6 +11,7 @@ import {
   UpdateAccountBody,
   UpdateAccountParams,
   DeleteAccountParams,
+  DeleteAccountsBulkBody,
   TestAccountParams,
   ScanAccountParams,
 } from "@workspace/api-zod";
@@ -523,6 +524,42 @@ router.post("/accounts/scan-all", async (req, res) => {
     failed: totals.failed,
     results,
   });
+});
+
+/**
+ * Remove several accounts at once.
+ *
+ * Soft delete, matching the single-account route: matched and archived messages
+ * reference these rows and carry a snapshot of their label and address, so
+ * destroying them would destroy attributable history.
+ *
+ * A single UPDATE over `inArray` rather than a loop: one statement is atomic, so a
+ * partial failure cannot leave half the selection removed.
+ */
+router.post("/accounts/delete-bulk", async (req, res) => {
+  const body = DeleteAccountsBulkBody.parse(req.body);
+
+  // De-duplicate, so a repeated id cannot appear in both result lists.
+  const ids = [...new Set(body.ids)];
+
+  const removed = await db
+    .update(emailAccountsTable)
+    .set({ deletedAt: new Date(), active: false })
+    .where(and(inArray(emailAccountsTable.id, ids), notDeleted))
+    .returning({ id: emailAccountsTable.id });
+
+  const deleted = removed.map((r) => r.id);
+  const deletedSet = new Set(deleted);
+  // An id that matched nothing was either never real or already removed. Either
+  // way the requested end state holds, so report it rather than erroring.
+  const notFound = ids.filter((id) => !deletedSet.has(id));
+
+  logger.info(
+    { deleted: deleted.length, notFound: notFound.length },
+    "Bulk account delete complete",
+  );
+
+  res.json({ deleted, notFound });
 });
 
 router.patch("/accounts/:id", async (req, res) => {
