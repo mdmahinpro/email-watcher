@@ -22,4 +22,6 @@ export interface CreateAccountBody {
   username: string;
   /** @minLength 1 */
   password: string;
+  /** Accept a TLS certificate that does not match the hostname. Enable only when the server presents a mismatched certificate, as shared cPanel hosting commonly does. */
+  allowInvalidCert?: boolean;
 }

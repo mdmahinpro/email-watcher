@@ -582,6 +582,12 @@ components:
           type: boolean
         username:
           type: string
+        allowInvalidCert:
+          description: >-
+            Accept a TLS certificate that does not match the hostname. Needed for
+            shared cPanel hosting that serves the provider's certificate on
+            mail.<domain>.
+          type: boolean
         active:
           type: boolean
         lastCheckedAt:
@@ -605,6 +611,7 @@ components:
         - smtpPort
         - smtpSecure
         - username
+        - allowInvalidCert
         - active
         - createdAt
 
@@ -643,6 +650,12 @@ components:
           allOf:
             - $ref: "#/components/schemas/CaptureMode"
           default: all
+        allowInvalidCert:
+          description: >-
+            Accept a TLS certificate that does not match the hostname. Not
+            normally needed for Hostinger, whose certificates are valid.
+          type: boolean
+          default: false
       required:
         - mailboxes
 
@@ -695,6 +708,13 @@ components:
         password:
           type: string
           minLength: 1
+        allowInvalidCert:
+          description: >-
+            Accept a TLS certificate that does not match the hostname. Enable only
+            when the server presents a mismatched certificate, as shared cPanel
+            hosting commonly does.
+          type: boolean
+          default: false
       required:
         - label
         - emailAddress
@@ -736,6 +756,8 @@ components:
           type: string
           minLength: 1
         active:
+          type: boolean
+        allowInvalidCert:
           type: boolean
         captureMode:
           $ref: "#/components/schemas/CaptureMode"
@@ -789,6 +811,12 @@ components:
         smtpSecure:
           type: boolean
           default: true
+        allowInvalidCert:
+          description: >-
+            Applies to every mailbox in the batch. Shared cPanel hosting commonly
+            serves a certificate that does not match mail.<domain>.
+          type: boolean
+          default: false
       required:
         - accounts
 

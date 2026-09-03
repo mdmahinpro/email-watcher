@@ -56,6 +56,20 @@ export const emailAccountsTable = pgTable(
     smtpSecure: boolean("smtp_secure").notNull().default(true),
     username: text("username").notNull(),
     password: text("password").notNull(),
+    /**
+     * Accept a TLS certificate that does not match the hostname.
+     *
+     * Shared cPanel hosting routinely serves the provider's own certificate on
+     * `mail.<customer-domain>` — e.g. GoDaddy answers with
+     * `*.prod.sin2.secureserver.net` — so a strict client rejects the connection
+     * with ERR_TLS_CERT_ALTNAME_INVALID even though the credentials are fine and
+     * webmail works. This is the same "accept this certificate" decision every
+     * desktop mail client offers.
+     *
+     * Off by default: enabling it means a man-in-the-middle can present any
+     * certificate, so it must be a deliberate per-account choice.
+     */
+    allowInvalidCert: boolean("allow_invalid_cert").notNull().default(false),
     active: boolean("active").notNull().default(true),
     lastUidSeen: integer("last_uid_seen"),
     lastCheckedAt: timestamp("last_checked_at"),

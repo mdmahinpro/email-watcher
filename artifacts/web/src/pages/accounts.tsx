@@ -105,6 +105,7 @@ const accountSchema = z.object({
   smtpSecure: z.boolean().default(true),
   username: z.string().min(1, "Username is required"),
   password: z.string(),
+  allowInvalidCert: z.boolean().default(false),
 });
 
 const createAccountSchema = accountSchema.extend({
@@ -420,6 +421,9 @@ export default function Accounts() {
                           )}
                           <span className="text-[11px] text-muted-foreground">
                             {account.imapSecure ? "SSL/TLS" : "Insecure"}
+                            {/* An unverified certificate is a real security
+                                trade-off, so never leave it invisible. */}
+                            {account.allowInvalidCert ? ", unverified" : ""}
                           </span>
                         </div>
                       </div>
@@ -664,6 +668,7 @@ function AccountForm({
       smtpSecure: account?.smtpSecure ?? true,
       username: account?.username ?? "",
       password: "",
+      allowInvalidCert: account?.allowInvalidCert ?? false,
     },
   });
 
@@ -847,6 +852,44 @@ function AccountForm({
             />
           </div>
 
+          <FormField
+            control={form.control}
+            name="allowInvalidCert"
+            render={({ field }) => (
+              <FormItem className="rounded-xl border border-white/10 bg-black/20 p-3 sm:p-4">
+                <div className="flex flex-row items-start justify-between gap-3">
+                  <div className="min-w-0 space-y-1">
+                    <FormLabel className="flex items-center gap-1.5 text-sm font-medium">
+                      <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-yellow-400" />
+                      Accept mismatched TLS certificate
+                    </FormLabel>
+                    <FormDescription className="text-xs">
+                      Enable if the connection test fails with a certificate or
+                      hostname error. Shared cPanel hosting often serves the
+                      provider's own certificate on{" "}
+                      <code className="font-mono">mail.yourdomain.com</code>,
+                      which a strict client rejects even though the mailbox works.
+                    </FormDescription>
+                  </div>
+                  <FormControl>
+                    <Switch
+                      className="mt-0.5 shrink-0"
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </div>
+                {field.value ? (
+                  <p className="mt-2 text-xs text-yellow-400/90">
+                    The connection stays encrypted, but the server's identity is
+                    no longer verified, so a network attacker could impersonate
+                    it. Leave off unless a test actually fails.
+                  </p>
+                ) : null}
+              </FormItem>
+            )}
+          />
+
           <DialogFooter>
             <Button
               type="button"
@@ -971,6 +1014,7 @@ const bulkSchema = z.object({
   smtpHost: z.string(),
   smtpPort: port(465),
   smtpSecure: z.boolean().default(true),
+  allowInvalidCert: z.boolean().default(false),
 });
 
 type BulkFormValues = z.infer<typeof bulkSchema>;
@@ -999,6 +1043,7 @@ function BulkAccountForm({
       smtpHost: "",
       smtpPort: 465,
       smtpSecure: true,
+      allowInvalidCert: false,
     },
   });
 
@@ -1088,6 +1133,7 @@ function BulkAccountForm({
         imapSecure: values.imapSecure,
         smtpPort: values.smtpPort,
         smtpSecure: values.smtpSecure,
+        allowInvalidCert: values.allowInvalidCert,
       },
     });
   }
@@ -1226,6 +1272,36 @@ function BulkAccountForm({
             portName="smtpPort"
             secureName="smtpSecure"
             hostPlaceholder="Leave blank to use mail.<domain>"
+          />
+
+          <FormField
+            control={form.control}
+            name="allowInvalidCert"
+            render={({ field }) => (
+              <FormItem className="rounded-xl border border-white/10 bg-black/20 p-3 sm:p-4">
+                <div className="flex flex-row items-start justify-between gap-3">
+                  <div className="min-w-0 space-y-1">
+                    <FormLabel className="flex items-center gap-1.5 text-sm font-medium">
+                      <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-yellow-400" />
+                      Accept mismatched TLS certificates
+                    </FormLabel>
+                    <FormDescription className="text-xs">
+                      Applies to every address in this batch. Shared cPanel
+                      hosting typically serves the provider's own certificate on
+                      mail.&lt;domain&gt;, so leave this on for such mailboxes and
+                      turn it off per account later if not needed.
+                    </FormDescription>
+                  </div>
+                  <FormControl>
+                    <Switch
+                      className="mt-0.5 shrink-0"
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </div>
+              </FormItem>
+            )}
           />
 
           {result && result.failed.length > 0 ? (

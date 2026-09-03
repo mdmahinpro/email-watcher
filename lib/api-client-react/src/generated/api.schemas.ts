@@ -63,6 +63,8 @@ export interface EmailAccount {
   smtpPort: number;
   smtpSecure: boolean;
   username: string;
+  /** Accept a TLS certificate that does not match the hostname. Needed for shared cPanel hosting that serves the provider's certificate on mail.<domain>. */
+  allowInvalidCert: boolean;
   active: boolean;
   lastCheckedAt?: string | null;
   lastError?: string | null;
@@ -109,6 +111,8 @@ export interface CreateHostingerAccountsBody {
   smtpMode?: CreateHostingerAccountsBodySmtpMode;
   /** Defaults to `all` for Hostinger mailboxes: every arriving message is archived into /inbox unfiltered. Set `keywords` to put a mailbox into the keyword triage queue instead. */
   captureMode?: CaptureMode;
+  /** Accept a TLS certificate that does not match the hostname. Not normally needed for Hostinger, whose certificates are valid. */
+  allowInvalidCert?: boolean;
 }
 
 export interface CreateAccountBody {
@@ -127,6 +131,8 @@ export interface CreateAccountBody {
   username: string;
   /** @minLength 1 */
   password: string;
+  /** Accept a TLS certificate that does not match the hostname. Enable only when the server presents a mismatched certificate, as shared cPanel hosting commonly does. */
+  allowInvalidCert?: boolean;
 }
 
 /**
@@ -149,6 +155,7 @@ export interface UpdateAccountBody {
   /** @minLength 1 */
   password?: string;
   active?: boolean;
+  allowInvalidCert?: boolean;
   captureMode?: CaptureMode;
 }
 
@@ -195,6 +202,8 @@ export interface BulkCreateAccountsBody {
   smtpHost?: string;
   smtpPort?: number;
   smtpSecure?: boolean;
+  /** Applies to every mailbox in the batch. Shared cPanel hosting commonly serves a certificate that does not match mail.<domain>. */
+  allowInvalidCert?: boolean;
 }
 
 export interface BulkCreateFailure {

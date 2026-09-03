@@ -75,6 +75,11 @@ export const ListAccountsResponseItem = zod.object({
   smtpPort: zod.number(),
   smtpSecure: zod.boolean(),
   username: zod.string(),
+  allowInvalidCert: zod
+    .boolean()
+    .describe(
+      "Accept a TLS certificate that does not match the hostname. Needed for shared cPanel hosting that serves the provider's certificate on mail.<domain>.",
+    ),
   active: zod.boolean(),
   lastCheckedAt: zod.string().nullish(),
   lastError: zod.string().nullish(),
@@ -91,6 +96,8 @@ export const createAccountBodyImapSecureDefault = true;
 export const createAccountBodySmtpPortDefault = 465;
 export const createAccountBodySmtpSecureDefault = true;
 
+export const createAccountBodyAllowInvalidCertDefault = false;
+
 export const CreateAccountBody = zod.object({
   label: zod.string().min(1),
   emailAddress: zod.string().email(),
@@ -102,6 +109,12 @@ export const CreateAccountBody = zod.object({
   smtpSecure: zod.boolean().default(createAccountBodySmtpSecureDefault),
   username: zod.string().min(1),
   password: zod.string().min(1),
+  allowInvalidCert: zod
+    .boolean()
+    .default(createAccountBodyAllowInvalidCertDefault)
+    .describe(
+      "Accept a TLS certificate that does not match the hostname. Enable only when the server presents a mismatched certificate, as shared cPanel hosting commonly does.",
+    ),
 });
 
 /**
@@ -114,6 +127,7 @@ export const createAccountsBulkBodyImapPortDefault = 993;
 export const createAccountsBulkBodyImapSecureDefault = true;
 export const createAccountsBulkBodySmtpPortDefault = 465;
 export const createAccountsBulkBodySmtpSecureDefault = true;
+export const createAccountsBulkBodyAllowInvalidCertDefault = false;
 
 export const CreateAccountsBulkBody = zod
   .object({
@@ -157,6 +171,12 @@ export const CreateAccountsBulkBody = zod
       ),
     smtpPort: zod.number().default(createAccountsBulkBodySmtpPortDefault),
     smtpSecure: zod.boolean().default(createAccountsBulkBodySmtpSecureDefault),
+    allowInvalidCert: zod
+      .boolean()
+      .default(createAccountsBulkBodyAllowInvalidCertDefault)
+      .describe(
+        "Applies to every mailbox in the batch. Shared cPanel hosting commonly serves a certificate that does not match mail.<domain>.",
+      ),
   })
   .describe(
     "Create many accounts in one request.\nServer settings default to `mail.<domain>` derived from each address, so a batch spanning several domains works without naming a host. Supply `imapHost`\/`smtpHost` to force one server for the whole batch instead.\nPasswords work the same way: a mailbox may carry its own, or fall back to the batch-level `password`. Whatever a mailbox does not specify — label, username — defaults to its address.",
@@ -185,6 +205,11 @@ export const CreateAccountsBulkResponse = zod.object({
       smtpPort: zod.number(),
       smtpSecure: zod.boolean(),
       username: zod.string(),
+      allowInvalidCert: zod
+        .boolean()
+        .describe(
+          "Accept a TLS certificate that does not match the hostname. Needed for shared cPanel hosting that serves the provider's certificate on mail.<domain>.",
+        ),
       active: zod.boolean(),
       lastCheckedAt: zod.string().nullish(),
       lastError: zod.string().nullish(),
@@ -208,6 +233,7 @@ export const createHostingerAccountsBodyMailboxesMax = 200;
 
 export const createHostingerAccountsBodySmtpModeDefault = `ssl`;
 export const createHostingerAccountsBodyCaptureModeDefault = `all`;
+export const createHostingerAccountsBodyAllowInvalidCertDefault = false;
 
 export const CreateHostingerAccountsBody = zod
   .object({
@@ -247,6 +273,12 @@ export const CreateHostingerAccountsBody = zod
       .describe(
         "Defaults to `all` for Hostinger mailboxes: every arriving message is archived into \/inbox unfiltered. Set `keywords` to put a mailbox into the keyword triage queue instead.",
       ),
+    allowInvalidCert: zod
+      .boolean()
+      .default(createHostingerAccountsBodyAllowInvalidCertDefault)
+      .describe(
+        "Accept a TLS certificate that does not match the hostname. Not normally needed for Hostinger, whose certificates are valid.",
+      ),
   })
   .describe(
     "Hostinger mailboxes to monitor. IMAP and SMTP settings come from Hostinger's defaults, so only mailboxes and passwords are supplied.",
@@ -275,6 +307,11 @@ export const CreateHostingerAccountsResponse = zod.object({
       smtpPort: zod.number(),
       smtpSecure: zod.boolean(),
       username: zod.string(),
+      allowInvalidCert: zod
+        .boolean()
+        .describe(
+          "Accept a TLS certificate that does not match the hostname. Needed for shared cPanel hosting that serves the provider's certificate on mail.<domain>.",
+        ),
       active: zod.boolean(),
       lastCheckedAt: zod.string().nullish(),
       lastError: zod.string().nullish(),
@@ -321,6 +358,7 @@ export const UpdateAccountBody = zod
     username: zod.string().min(1).optional(),
     password: zod.string().min(1).optional(),
     active: zod.boolean().optional(),
+    allowInvalidCert: zod.boolean().optional(),
     captureMode: zod
       .enum(["keywords", "all"])
       .optional()
@@ -353,6 +391,11 @@ export const UpdateAccountResponse = zod.object({
   smtpPort: zod.number(),
   smtpSecure: zod.boolean(),
   username: zod.string(),
+  allowInvalidCert: zod
+    .boolean()
+    .describe(
+      "Accept a TLS certificate that does not match the hostname. Needed for shared cPanel hosting that serves the provider's certificate on mail.<domain>.",
+    ),
   active: zod.boolean(),
   lastCheckedAt: zod.string().nullish(),
   lastError: zod.string().nullish(),

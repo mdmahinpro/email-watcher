@@ -27,4 +27,6 @@ export interface CreateHostingerAccountsBody {
   smtpMode?: CreateHostingerAccountsBodySmtpMode;
   /** Defaults to `all` for Hostinger mailboxes: every arriving message is archived into /inbox unfiltered. Set `keywords` to put a mailbox into the keyword triage queue instead. */
   captureMode?: CaptureMode;
+  /** Accept a TLS certificate that does not match the hostname. Not normally needed for Hostinger, whose certificates are valid. */
+  allowInvalidCert?: boolean;
 }

@@ -5,7 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { BulkAccountEntry } from "./bulkAccountEntry";
+import type { BulkAccountEntry } from './bulkAccountEntry';
 
 /**
  * Create many accounts in one request.
@@ -37,4 +37,6 @@ export interface BulkCreateAccountsBody {
   smtpHost?: string;
   smtpPort?: number;
   smtpSecure?: boolean;
+  /** Applies to every mailbox in the batch. Shared cPanel hosting commonly serves a certificate that does not match mail.<domain>. */
+  allowInvalidCert?: boolean;
 }

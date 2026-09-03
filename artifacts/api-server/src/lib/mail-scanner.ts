@@ -59,6 +59,12 @@ function createImapClient(account: EmailAccount): ImapFlow {
     auth: { user: account.username, pass: account.password },
     logger: false,
     ...IMAP_TIMEOUTS,
+    // Shared cPanel hosting routinely serves the provider's own certificate on
+    // mail.<customer-domain>, so a strict client rejects a perfectly working
+    // mailbox. Opting out is per-account and deliberate; see the column comment.
+    ...(account.allowInvalidCert
+      ? { tls: { rejectUnauthorized: false } }
+      : {}),
   });
 
   // ImapFlow is an EventEmitter that emits 'error' asynchronously (for example
@@ -74,6 +80,46 @@ function createImapClient(account: EmailAccount): ImapFlow {
   });
 
   return client;
+}
+
+/**
+ * Node's TLS errors for a certificate that does not match the hostname.
+ *
+ * A bare "ERR_TLS_CERT_ALTNAME_INVALID" tells an operator nothing about what to
+ * do, and the mailbox is usually fine — it is the certificate that is wrong. So
+ * these are rewritten into the actual remedy.
+ */
+const CERT_ERROR_CODES = [
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "CERT_HAS_EXPIRED",
+  "ERR_TLS_CERT_ALTNAME_UNSUPPORTED",
+];
+
+/** Turn a raw connection failure into something that names the fix. */
+export function describeConnectionError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const code =
+    typeof err === "object" && err !== null && "code" in err
+      ? String((err as { code: unknown }).code)
+      : "";
+
+  const looksLikeCert =
+    CERT_ERROR_CODES.includes(code) ||
+    /altname|self.signed|certificate/i.test(message);
+
+  if (looksLikeCert) {
+    return (
+      `${message} — the server's TLS certificate does not match this hostname. ` +
+      "This is normal on shared cPanel hosting. Enable \"Accept mismatched TLS " +
+      "certificate\" on this account, or use the hostname the certificate is " +
+      "issued for."
+    );
+  }
+
+  return message;
 }
 
 export async function testAccountConnection(
@@ -93,8 +139,9 @@ export async function testAccountConnection(
       lock.release();
     }
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, message: msg };
+    // The Test button is where a certificate mismatch is most likely to be met,
+    // so this is the highest-value place to name the remedy.
+    return { ok: false, message: describeConnectionError(err) };
   } finally {
     try {
       await client.logout();
@@ -184,6 +231,11 @@ async function forwardPending(
     secure: account.smtpSecure,
     auth: { user: account.username, pass: account.password },
     ...SMTP_TIMEOUTS,
+    // Same certificate situation as IMAP: one shared host serving many customer
+    // domains presents a certificate for its own name.
+    ...(account.allowInvalidCert
+      ? { tls: { rejectUnauthorized: false } }
+      : {}),
   });
 
   let forwarded = 0;
@@ -194,7 +246,7 @@ async function forwardPending(
         await transporter.sendMail(buildForwardBody(account, item, forwardTo));
         forwarded++;
       } catch (err: unknown) {
-        forwardError = err instanceof Error ? err.message : String(err);
+        forwardError = describeConnectionError(err);
         logger.error(
           { err, accountId: account.id, uid: item.uid },
           "Failed to forward matched email",
@@ -465,7 +517,9 @@ async function runScan(account: EmailAccount): Promise<ScanOutcome> {
       lock.release();
     }
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    // Stored on the account and shown on its card, so it must name the remedy
+    // rather than leave a bare TLS error code.
+    const msg = describeConnectionError(err);
     logger.error({ err, accountId: account.id }, "Scan failed");
     await db
       .update(emailAccountsTable)

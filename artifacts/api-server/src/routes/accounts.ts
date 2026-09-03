@@ -153,6 +153,7 @@ router.post("/accounts", async (req, res) => {
       smtpSecure: body.smtpSecure ?? true,
       username: body.username,
       password: body.password,
+      allowInvalidCert: body.allowInvalidCert ?? false,
       // The generic form is the keyword-triage path.
       captureMode: "keywords",
       active: true,
@@ -224,6 +225,7 @@ router.post("/accounts/bulk", async (req, res) => {
       smtpSecure: body.smtpSecure,
       username: entry.username?.trim() || emailAddress,
       password,
+      allowInvalidCert: body.allowInvalidCert,
       captureMode: "keywords",
       active: true,
     });
@@ -308,6 +310,7 @@ router.post("/accounts/hostinger", async (req, res) => {
       // Hostinger authenticates with the full email address.
       username: emailAddress,
       password,
+      allowInvalidCert: body.allowInvalidCert,
       active: true,
     });
   }
@@ -356,6 +359,9 @@ router.patch("/accounts/:id", async (req, res) => {
   if (body.password !== undefined) patch.password = body.password;
   if (body.active !== undefined) patch.active = body.active;
   if (body.captureMode !== undefined) patch.captureMode = body.captureMode;
+  if (body.allowInvalidCert !== undefined) {
+    patch.allowInvalidCert = body.allowInvalidCert;
+  }
 
   // UIDs are only meaningful within one mailbox. If the account now points at a
   // different mailbox, the stored high-water mark is meaningless, so drop it and
@@ -380,7 +386,10 @@ router.patch("/accounts/:id", async (req, res) => {
     body.smtpHost !== undefined ||
     body.smtpPort !== undefined ||
     body.smtpSecure !== undefined ||
-    body.password !== undefined;
+    body.password !== undefined ||
+    // Accepting a mismatched certificate is precisely the fix for a stored TLS
+    // error, so the stale message must not outlive it.
+    body.allowInvalidCert !== undefined;
   if (connectionChanged || body.active === true) {
     patch.lastError = null;
   }

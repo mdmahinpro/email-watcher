@@ -160,6 +160,7 @@ function accountRow(overrides: Record<string, unknown> = {}) {
     smtpSecure: true,
     username: "support@example.com",
     password: "stored-secret",
+    allowInvalidCert: false,
     active: true,
     lastUidSeen: 120,
     lastCheckedAt: NOW,
@@ -329,6 +330,31 @@ describe("PATCH /api/accounts/:id", () => {
     expect(res.status).toBe(200);
     const [patch] = dbMock.argsOf("set") as [Record<string, unknown>];
     expect(patch).toEqual({ captureMode: "all" });
+  });
+
+  it("accepting a mismatched certificate clears the stale TLS error", async () => {
+    // Enabling the flag is precisely the fix for the stored error, so the old
+    // message must not outlive it and keep the card looking broken.
+    const existing = accountRow({
+      lastError: "Hostname/IP does not match certificate's altnames",
+    });
+    dbMock.enqueue([existing], [{ ...existing, allowInvalidCert: true }]);
+
+    const res = await request.patch("/api/accounts/7")
+      .send({ allowInvalidCert: true });
+
+    expect(res.status).toBe(200);
+    const [patch] = dbMock.argsOf("set") as [Record<string, unknown>];
+    expect(patch).toEqual({ allowInvalidCert: true, lastError: null });
+  });
+
+  it("exposes the certificate flag without leaking the password", async () => {
+    dbMock.enqueue([accountRow({ allowInvalidCert: true })]);
+
+    const res = await request.get("/api/accounts");
+
+    expect(res.body[0].allowInvalidCert).toBe(true);
+    expect(res.body[0]).not.toHaveProperty("password");
   });
 
   it("rejects an unknown capture mode", async () => {

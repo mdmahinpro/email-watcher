@@ -27,5 +27,6 @@ export interface UpdateAccountBody {
   /** @minLength 1 */
   password?: string;
   active?: boolean;
+  allowInvalidCert?: boolean;
   captureMode?: CaptureMode;
 }

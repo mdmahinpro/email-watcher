@@ -21,6 +21,8 @@ export interface EmailAccount {
   smtpPort: number;
   smtpSecure: boolean;
   username: string;
+  /** Accept a TLS certificate that does not match the hostname. Needed for shared cPanel hosting that serves the provider's certificate on mail.<domain>. */
+  allowInvalidCert: boolean;
   active: boolean;
   lastCheckedAt?: string | null;
   lastError?: string | null;
