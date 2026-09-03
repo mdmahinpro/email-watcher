@@ -8,6 +8,11 @@
 
 export interface BulkAccountEntry {
   emailAddress: string;
+  /**
+   * Overrides the batch password for this mailbox only.
+   * @minLength 1
+   */
+  password?: string;
   /** @minLength 1 */
   label?: string;
   /** @minLength 1 */

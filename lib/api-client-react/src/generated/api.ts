@@ -548,7 +548,7 @@ export const useCreateAccount = <
 };
 
 /**
- * @summary Add several accounts that share one password and server config
+ * @summary Add several accounts, deriving each server from its own domain
  */
 export const getCreateAccountsBulkUrl = () => {
   return `/api/accounts/bulk`;
@@ -611,7 +611,7 @@ export type CreateAccountsBulkMutationBody = BodyType<BulkCreateAccountsBody>;
 export type CreateAccountsBulkMutationError = ErrorType<unknown>;
 
 /**
- * @summary Add several accounts that share one password and server config
+ * @summary Add several accounts, deriving each server from its own domain
  */
 export const useCreateAccountsBulk = <
   TError = ErrorType<unknown>,

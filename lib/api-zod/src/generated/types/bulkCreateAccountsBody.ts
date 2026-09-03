@@ -8,7 +8,9 @@
 import type { BulkAccountEntry } from "./bulkAccountEntry";
 
 /**
- * Create many accounts that share one password and one server configuration. Each entry supplies only its own address; the username defaults to the address unless an explicit username is given, and the label defaults to the address.
+ * Create many accounts in one request.
+Server settings default to `mail.<domain>` derived from each address, so a batch spanning several domains works without naming a host. Supply `imapHost`/`smtpHost` to force one server for the whole batch instead.
+Passwords work the same way: a mailbox may carry its own, or fall back to the batch-level `password`. Whatever a mailbox does not specify — label, username — defaults to its address.
  */
 export interface BulkCreateAccountsBody {
   /**
@@ -16,14 +18,23 @@ export interface BulkCreateAccountsBody {
    * @maxItems 200
    */
   accounts: BulkAccountEntry[];
-  /** @minLength 1 */
-  password: string;
-  /** @minLength 1 */
-  imapHost: string;
+  /**
+   * Fallback password for any mailbox that does not carry its own. Required unless every mailbox supplies a password.
+   * @minLength 1
+   */
+  password?: string;
+  /**
+   * Applies to every mailbox in the batch. Omit to derive `mail.<domain>` from each address individually.
+   * @minLength 1
+   */
+  imapHost?: string;
   imapPort?: number;
   imapSecure?: boolean;
-  /** @minLength 1 */
-  smtpHost: string;
+  /**
+   * Applies to every mailbox in the batch. Omit to derive `mail.<domain>` from each address individually.
+   * @minLength 1
+   */
+  smtpHost?: string;
   smtpPort?: number;
   smtpSecure?: boolean;
 }

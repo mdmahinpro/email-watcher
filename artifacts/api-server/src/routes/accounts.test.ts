@@ -374,6 +374,141 @@ describe("POST /api/accounts/bulk", () => {
     smtpHost: "smtp.example.com",
   };
 
+  it("derives mail.<domain> per address when no host is given", async () => {
+    // The point of the default: one paste covering several domains, which a
+    // single shared host cannot serve.
+    dbMock.enqueue(
+      [],
+      [accountRow({ id: 11 })],
+      [accountRow({ id: 12 })],
+      [accountRow({ id: 13 })],
+    );
+
+    const res = await request.post("/api/accounts/bulk").send({
+      accounts: [
+        { emailAddress: "paud1@andonosari.com" },
+        { emailAddress: "tamer@albadrmed.com" },
+        { emailAddress: "vinay@andrewsgroup.co.in" },
+      ],
+      password: "pw",
+    });
+
+    expect(res.status).toBe(200);
+    const rows = dbMock.allArgsOf("values").map((a) => a[0]) as Array<
+      Record<string, unknown>
+    >;
+    expect(rows.map((r) => r["imapHost"])).toEqual([
+      "mail.andonosari.com",
+      "mail.albadrmed.com",
+      "mail.andrewsgroup.co.in",
+    ]);
+    // SMTP derives from the same domain.
+    expect(rows.map((r) => r["smtpHost"])).toEqual([
+      "mail.andonosari.com",
+      "mail.albadrmed.com",
+      "mail.andrewsgroup.co.in",
+    ]);
+  });
+
+  it("applies the default ports alongside derived hosts", async () => {
+    dbMock.enqueue([], [accountRow({ id: 11 })]);
+
+    await request.post("/api/accounts/bulk").send({
+      accounts: [{ emailAddress: "a@example.com" }],
+      password: "pw",
+    });
+
+    const [row] = dbMock.argsOf("values") as [Record<string, unknown>];
+    expect(row).toMatchObject({
+      imapHost: "mail.example.com",
+      imapPort: 993,
+      imapSecure: true,
+      smtpHost: "mail.example.com",
+      smtpPort: 465,
+      smtpSecure: true,
+    });
+  });
+
+  it("an explicit host overrides derivation for the whole batch", async () => {
+    dbMock.enqueue([], [accountRow({ id: 11 })], [accountRow({ id: 12 })]);
+
+    await request.post("/api/accounts/bulk").send({
+      accounts: [
+        { emailAddress: "a@one.com" },
+        { emailAddress: "b@two.com" },
+      ],
+      password: "pw",
+      imapHost: "imap.hostinger.com",
+      smtpHost: "smtp.hostinger.com",
+    });
+
+    const rows = dbMock.allArgsOf("values").map((a) => a[0]) as Array<
+      Record<string, unknown>
+    >;
+    for (const row of rows) {
+      expect(row["imapHost"]).toBe("imap.hostinger.com");
+      expect(row["smtpHost"]).toBe("smtp.hostinger.com");
+    }
+  });
+
+  it("prefers a per-mailbox password over the batch one", async () => {
+    dbMock.enqueue([], [accountRow({ id: 11 })], [accountRow({ id: 12 })]);
+
+    await request.post("/api/accounts/bulk").send({
+      accounts: [
+        { emailAddress: "a@one.com", password: "own-pw" },
+        { emailAddress: "b@two.com" },
+      ],
+      password: "shared-pw",
+    });
+
+    const rows = dbMock.allArgsOf("values").map((a) => a[0]) as Array<
+      Record<string, unknown>
+    >;
+    expect(rows[0]!["password"]).toBe("own-pw");
+    expect(rows[1]!["password"]).toBe("shared-pw");
+  });
+
+  it("works with per-mailbox passwords and no batch password", async () => {
+    dbMock.enqueue([], [accountRow({ id: 11 })]);
+
+    const res = await request.post("/api/accounts/bulk").send({
+      accounts: [{ emailAddress: "a@one.com", password: "own-pw" }],
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.created).toHaveLength(1);
+  });
+
+  it("reports a mailbox with no password and no batch fallback", async () => {
+    dbMock.enqueue([], [accountRow({ id: 11 })]);
+
+    const res = await request.post("/api/accounts/bulk").send({
+      accounts: [
+        { emailAddress: "a@one.com", password: "own-pw" },
+        { emailAddress: "b@two.com" },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.created).toHaveLength(1);
+    expect(res.body.failed).toHaveLength(1);
+    expect(res.body.failed[0].reason).toMatch(/no shared password/i);
+  });
+
+  it("reports an address whose domain yields no usable host", async () => {
+    // A dotless domain cannot be a public mail domain, so nothing can be derived.
+    dbMock.enqueue([]);
+
+    const res = await request.post("/api/accounts/bulk").send({
+      accounts: [{ emailAddress: "root@localhost" }],
+      password: "pw",
+    });
+
+    // Rejected by the schema's email format before reaching derivation.
+    expect(res.status).toBe(400);
+  });
+
   it("creates one account per address with the shared credentials", async () => {
     dbMock.enqueue(
       [], // no existing addresses
@@ -504,13 +639,21 @@ describe("POST /api/accounts/bulk", () => {
     expect(dbMock.countOf("values")).toBe(0);
   });
 
-  it("requires the shared password", async () => {
+  it("accepts a batch with no password field, reporting each mailbox instead", async () => {
+    // The batch password is optional now: a mailbox may carry its own. Missing
+    // both is a per-mailbox failure, not a rejected request, so one bad line
+    // cannot discard a long paste.
     const { password: _password, ...withoutPassword } = body;
+    dbMock.enqueue([]);
 
-    const res = await request.post("/api/accounts/bulk")
-      .send(withoutPassword);
+    const res = await request.post("/api/accounts/bulk").send(withoutPassword);
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    expect(res.body.created).toEqual([]);
+    expect(res.body.failed).toHaveLength(2);
+    for (const f of res.body.failed) {
+      expect(f.reason).toMatch(/no shared password/i);
+    }
   });
 
   it("rejects a batch larger than the documented maximum", async () => {

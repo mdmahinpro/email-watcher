@@ -61,11 +61,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { parseMailboxLines } from "@/lib/mailbox-lines";
 
 /** Matches the server-side cap in the OpenAPI spec. */
 const MAX_MAILBOXES = 200;
-
-const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type SmtpMode = "ssl" | "starttls";
 type CaptureMode = "all" | "keywords";
@@ -86,51 +85,6 @@ const CAPTURE_LABEL: Record<
     Icon: FilterIcon,
   },
 };
-
-interface ParsedRow {
-  emailAddress: string;
-  password?: string;
-  /** Line number in the textarea, for error reporting. */
-  line: number;
-  valid: boolean;
-}
-
-/**
- * Parse the mailbox textarea.
- *
- * One mailbox per line. A password may follow the address on the same line,
- * separated by a comma, colon, tab, semicolon, or whitespace — that covers a
- * paste from a spreadsheet, a CSV export, or a hand-written list. When no
- * per-line password is present the shared password is used instead.
- */
-function parseMailboxLines(raw: string): ParsedRow[] {
-  const rows: ParsedRow[] = [];
-  const seen = new Set<string>();
-
-  raw.split(/\r?\n/).forEach((rawLine, index) => {
-    const line = rawLine.trim();
-    if (!line) return;
-
-    // Split on the first separator only: passwords may themselves contain
-    // commas or colons, so everything after the address is one field.
-    const match = /^([^\s,;:\t]+)(?:[\s,;:\t]+(.*))?$/.exec(line);
-    const emailAddress = (match?.[1] ?? line).trim();
-    const password = match?.[2]?.trim();
-
-    const key = emailAddress.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-
-    rows.push({
-      emailAddress,
-      ...(password ? { password } : {}),
-      line: index + 1,
-      valid: EMAIL_SHAPE.test(emailAddress),
-    });
-  });
-
-  return rows;
-}
 
 type AccountStatus = "active" | "failing" | "paused";
 

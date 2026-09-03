@@ -75,6 +75,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
+import { distinctDomains, parseMailboxLines } from "@/lib/mailbox-lines";
 
 const PORT_RANGE = { min: 1, max: 65535 } as const;
 /** Matches the server-side cap in the OpenAPI spec. */
@@ -961,37 +962,18 @@ function ServerFieldset({
 
 const bulkSchema = z.object({
   addresses: z.string().min(1, "Enter at least one email address"),
-  password: z.string().min(1, "Password is required"),
-  imapHost: z.string().min(1, "IMAP Host is required"),
+  password: z.string(),
+  // Blank means "derive mail.<domain> per address", which is what lets one paste
+  // cover mailboxes on several different domains.
+  imapHost: z.string(),
   imapPort: port(993),
   imapSecure: z.boolean().default(true),
-  smtpHost: z.string().min(1, "SMTP Host is required"),
+  smtpHost: z.string(),
   smtpPort: port(465),
   smtpSecure: z.boolean().default(true),
 });
 
 type BulkFormValues = z.infer<typeof bulkSchema>;
-
-/**
- * Split a pasted blob into addresses. Accepts newline, comma, semicolon, or
- * whitespace separation so a paste from a spreadsheet, a mail client, or a
- * config file all work without reformatting.
- */
-function parseAddresses(raw: string): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const token of raw.split(/[\s,;]+/)) {
-    const value = token.trim();
-    if (!value) continue;
-    const key = value.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(value);
-  }
-  return out;
-}
-
-const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function BulkAccountForm({
   onClose,
@@ -1021,12 +1003,19 @@ function BulkAccountForm({
   });
 
   const addressesRaw = form.watch("addresses");
-  const parsed = useMemo(() => parseAddresses(addressesRaw), [addressesRaw]);
-  const invalid = useMemo(
-    () => parsed.filter((a) => !EMAIL_SHAPE.test(a)),
-    [parsed],
-  );
-  const overLimit = parsed.length > BULK_MAX_ACCOUNTS;
+  const imapHostRaw = form.watch("imapHost");
+  const smtpHostRaw = form.watch("smtpHost");
+  const sharedPassword = form.watch("password");
+
+  const rows = useMemo(() => parseMailboxLines(addressesRaw), [addressesRaw]);
+  const invalid = useMemo(() => rows.filter((r) => !r.valid), [rows]);
+  const domains = useMemo(() => distinctDomains(rows), [rows]);
+  const needingShared = useMemo(() => rows.filter((r) => !r.password), [rows]);
+  const overLimit = rows.length > BULK_MAX_ACCOUNTS;
+
+  const derivingHosts = imapHostRaw.trim() === "" || smtpHostRaw.trim() === "";
+  const sharedMissing =
+    needingShared.length > 0 && sharedPassword.trim() === "";
 
   const createBulk = useCreateAccountsBulk({
     mutation: {
@@ -1059,7 +1048,9 @@ function BulkAccountForm({
   function onSubmit(values: BulkFormValues) {
     if (invalid.length > 0) {
       form.setError("addresses", {
-        message: `Not a valid address: ${invalid.slice(0, 3).join(", ")}${invalid.length > 3 ? "…" : ""}`,
+        message: `Not a valid address on line${invalid.length === 1 ? "" : "s"} ${invalid
+          .map((r) => r.line)
+          .join(", ")}`,
       });
       return;
     }
@@ -1069,15 +1060,32 @@ function BulkAccountForm({
       });
       return;
     }
+    if (sharedMissing) {
+      form.setError("password", {
+        message: `${needingShared.length} address${needingShared.length === 1 ? "" : "es"} have no inline password, so a shared one is required.`,
+      });
+      return;
+    }
+
     setResult(null);
+    const imapHost = values.imapHost.trim();
+    const smtpHost = values.smtpHost.trim();
+
     createBulk.mutate({
       data: {
-        accounts: parsed.map((emailAddress) => ({ emailAddress })),
-        password: values.password,
-        imapHost: values.imapHost,
+        accounts: rows.map((r) => ({
+          emailAddress: r.emailAddress,
+          ...(r.password ? { password: r.password } : {}),
+        })),
+        // Omit rather than send empty: absent means "derive per address" on the
+        // server, and an empty string would fail its minLength check.
+        ...(needingShared.length > 0
+          ? { password: values.password.trim() }
+          : {}),
+        ...(imapHost ? { imapHost } : {}),
+        ...(smtpHost ? { smtpHost } : {}),
         imapPort: values.imapPort,
         imapSecure: values.imapSecure,
-        smtpHost: values.smtpHost,
         smtpPort: values.smtpPort,
         smtpSecure: values.smtpSecure,
       },
@@ -1091,9 +1099,9 @@ function BulkAccountForm({
           Bulk Add Accounts
         </DialogTitle>
         <DialogDescription>
-          For several mailboxes on one mail server that share a password. Each
-          address is added with the settings below; the label and username
-          default to the address.
+          Each address gets <code className="font-mono">mail.&lt;its own domain&gt;</code>{" "}
+          by default, so a list spanning several domains works in one paste. Fix
+          any that differ by editing the account afterwards.
         </DialogDescription>
       </DialogHeader>
 
@@ -1109,8 +1117,10 @@ function BulkAccountForm({
                 </FormLabel>
                 <FormControl>
                   <Textarea
-                    rows={5}
-                    placeholder={"sales@example.com\nsupport@example.com\nbilling@example.com"}
+                    rows={6}
+                    placeholder={
+                      "sales@example.com\nsupport@otherdomain.com, itsOwnPassword\nbilling@third.co.uk"
+                    }
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck={false}
@@ -1119,8 +1129,9 @@ function BulkAccountForm({
                   />
                 </FormControl>
                 <FormDescription className="text-xs">
-                  One per line, or separated by commas or spaces.
-                  {parsed.length > 0 ? (
+                  One per line. Add a password after the address to use a
+                  different one for that mailbox.
+                  {rows.length > 0 ? (
                     <>
                       {" "}
                       <span
@@ -1130,8 +1141,13 @@ function BulkAccountForm({
                             : "font-medium text-foreground"
                         }
                       >
-                        {parsed.length} address
-                        {parsed.length === 1 ? "" : "es"} detected
+                        {rows.length} address{rows.length === 1 ? "" : "es"}
+                        {domains.length > 1
+                          ? ` across ${domains.length} domains`
+                          : ""}
+                        {rows.length - needingShared.length > 0
+                          ? `, ${rows.length - needingShared.length} with an inline password`
+                          : ""}
                         {overLimit ? ` (max ${BULK_MAX_ACCOUNTS})` : ""}
                         {invalid.length > 0
                           ? `, ${invalid.length} malformed`
@@ -1144,6 +1160,28 @@ function BulkAccountForm({
               </FormItem>
             )}
           />
+
+          {/* Show exactly which servers will be used, so a wrong guess is caught
+              before 12 broken accounts are created. */}
+          {derivingHosts && domains.length > 0 ? (
+            <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+              <span className="pin-meta-label mb-2">
+                Servers that will be used
+              </span>
+              <ul className="max-h-32 space-y-1 overflow-y-auto">
+                {domains.map((d) => (
+                  <li key={d} className="pin-break font-mono text-xs">
+                    <span className="text-muted-foreground">{d}</span>
+                    {" → "}
+                    <span className="text-foreground">mail.{d}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Set a host below to override this for every address instead.
+              </p>
+            </div>
+          ) : null}
 
           <FormField
             control={form.control}
@@ -1158,13 +1196,14 @@ function BulkAccountForm({
                     type="password"
                     autoComplete="new-password"
                     placeholder="••••••••"
+                    aria-invalid={sharedMissing}
                     className="pin-input"
                     {...field}
                   />
                 </FormControl>
                 <FormDescription className="text-xs">
-                  Applied to every address in this batch. Edit an individual
-                  account afterwards if one differs.
+                  Used for any address without an inline password. Leave blank if
+                  every line carries its own.
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -1177,7 +1216,7 @@ function BulkAccountForm({
             hostName="imapHost"
             portName="imapPort"
             secureName="imapSecure"
-            hostPlaceholder="imap.example.com"
+            hostPlaceholder="Leave blank to use mail.<domain>"
           />
 
           <ServerFieldsetBulk
@@ -1186,7 +1225,7 @@ function BulkAccountForm({
             hostName="smtpHost"
             portName="smtpPort"
             secureName="smtpSecure"
-            hostPlaceholder="smtp.example.com"
+            hostPlaceholder="Leave blank to use mail.<domain>"
           />
 
           {result && result.failed.length > 0 ? (
@@ -1220,12 +1259,12 @@ function BulkAccountForm({
             </Button>
             <Button
               type="submit"
-              disabled={createBulk.isPending || parsed.length === 0}
+              disabled={createBulk.isPending || rows.length === 0}
               className="rounded-full"
             >
               {createBulk.isPending
                 ? "Adding..."
-                : `Add ${parsed.length || ""} Account${parsed.length === 1 ? "" : "s"}`.trim()}
+                : `Add ${rows.length || ""} Account${rows.length === 1 ? "" : "s"}`.trim()}
             </Button>
           </DialogFooter>
         </form>

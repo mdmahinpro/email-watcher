@@ -118,9 +118,12 @@ See `.env.example` for the Supabase connection-string format.
   - `PATCH` is a partial update; omit `password` to keep the stored credential,
     and use `active` to pause/resume monitoring
   - `DELETE` is a soft delete; matched messages are retained
-- `POST /accounts/bulk` — create many accounts that share one password and one
-  server configuration. Partial success: each address reports its own outcome,
-  and duplicates or existing addresses are skipped rather than failing the batch
+- `POST /accounts/bulk` — create many accounts in one request. Server settings
+  default to `mail.<domain>` derived from each address, so a batch spanning many
+  domains works without naming a host; an explicit `imapHost`/`smtpHost` overrides
+  that for the whole batch. A mailbox may carry its own password or fall back to
+  the batch one. Partial success: each address reports its own outcome, and
+  duplicates or existing addresses are skipped rather than failing the batch
 - `POST /accounts/hostinger` — create Hostinger mailboxes. Server settings come
   from `src/lib/providers.ts` (imap.hostinger.com:993 SSL, smtp.hostinger.com:465
   SSL or 587 STARTTLS), so the request only carries addresses and passwords. Each
@@ -323,7 +326,11 @@ pnpm --filter @workspace/scripts run icons
     and pagination. Deliberately a separate list so an archive of everything
     cannot bury the keyword queue.
   - **Accounts** — the general screen: any IMAP/SMTP server, entered by hand,
-    plus a bulk paste for many mailboxes on one server. Defaults to keyword mode.
+    plus a bulk paste. Bulk Add defaults each mailbox to `mail.<its own domain>`
+    (matching the usual MX convention for self-hosted domains) and accepts a
+    password per line, so a list spanning many domains works in one paste. It
+    previews the derived servers before creating anything. Defaults to keyword
+    mode.
   - **Hostinger** — provider-specific: paste addresses (optionally with an inline
     password per line) and the Hostinger servers are filled in. Defaults to
     archiving all mail. Its accounts also appear on Accounts with a badge.

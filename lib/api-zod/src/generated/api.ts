@@ -105,7 +105,7 @@ export const CreateAccountBody = zod.object({
 });
 
 /**
- * @summary Add several accounts that share one password and server config
+ * @summary Add several accounts, deriving each server from its own domain
  */
 
 export const createAccountsBulkBodyAccountsMax = 200;
@@ -121,22 +121,45 @@ export const CreateAccountsBulkBody = zod
       .array(
         zod.object({
           emailAddress: zod.string().email(),
+          password: zod
+            .string()
+            .min(1)
+            .optional()
+            .describe("Overrides the batch password for this mailbox only."),
           label: zod.string().min(1).optional(),
           username: zod.string().min(1).optional(),
         }),
       )
       .min(1)
       .max(createAccountsBulkBodyAccountsMax),
-    password: zod.string().min(1),
-    imapHost: zod.string().min(1),
+    password: zod
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Fallback password for any mailbox that does not carry its own. Required unless every mailbox supplies a password.",
+      ),
+    imapHost: zod
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Applies to every mailbox in the batch. Omit to derive `mail.<domain>` from each address individually.",
+      ),
     imapPort: zod.number().default(createAccountsBulkBodyImapPortDefault),
     imapSecure: zod.boolean().default(createAccountsBulkBodyImapSecureDefault),
-    smtpHost: zod.string().min(1),
+    smtpHost: zod
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Applies to every mailbox in the batch. Omit to derive `mail.<domain>` from each address individually.",
+      ),
     smtpPort: zod.number().default(createAccountsBulkBodySmtpPortDefault),
     smtpSecure: zod.boolean().default(createAccountsBulkBodySmtpSecureDefault),
   })
   .describe(
-    "Create many accounts that share one password and one server configuration. Each entry supplies only its own address; the username defaults to the address unless an explicit username is given, and the label defaults to the address.",
+    "Create many accounts in one request.\nServer settings default to `mail.<domain>` derived from each address, so a batch spanning several domains works without naming a host. Supply `imapHost`\/`smtpHost` to force one server for the whole batch instead.\nPasswords work the same way: a mailbox may carry its own, or fall back to the batch-level `password`. Whatever a mailbox does not specify — label, username — defaults to its address.",
   );
 
 export const CreateAccountsBulkResponse = zod.object({

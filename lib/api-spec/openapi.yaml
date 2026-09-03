@@ -126,7 +126,7 @@ paths:
     post:
       operationId: createAccountsBulk
       tags: [accounts]
-      summary: Add several accounts that share one password and server config
+      summary: Add several accounts, deriving each server from its own domain
       requestBody:
         required: true
         content:
@@ -742,10 +742,15 @@ components:
 
     BulkCreateAccountsBody:
       description: >-
-        Create many accounts that share one password and one server
-        configuration. Each entry supplies only its own address; the username
-        defaults to the address unless an explicit username is given, and the
-        label defaults to the address.
+        Create many accounts in one request.
+
+        Server settings default to `mail.<domain>` derived from each address, so a
+        batch spanning several domains works without naming a host. Supply
+        `imapHost`/`smtpHost` to force one server for the whole batch instead.
+
+        Passwords work the same way: a mailbox may carry its own, or fall back to
+        the batch-level `password`. Whatever a mailbox does not specify — label,
+        username — defaults to its address.
       type: object
       properties:
         accounts:
@@ -755,9 +760,15 @@ components:
           items:
             $ref: "#/components/schemas/BulkAccountEntry"
         password:
+          description: >-
+            Fallback password for any mailbox that does not carry its own.
+            Required unless every mailbox supplies a password.
           type: string
           minLength: 1
         imapHost:
+          description: >-
+            Applies to every mailbox in the batch. Omit to derive
+            `mail.<domain>` from each address individually.
           type: string
           minLength: 1
         imapPort:
@@ -767,6 +778,9 @@ components:
           type: boolean
           default: true
         smtpHost:
+          description: >-
+            Applies to every mailbox in the batch. Omit to derive
+            `mail.<domain>` from each address individually.
           type: string
           minLength: 1
         smtpPort:
@@ -777,9 +791,6 @@ components:
           default: true
       required:
         - accounts
-        - password
-        - imapHost
-        - smtpHost
 
     BulkAccountEntry:
       type: object
@@ -787,6 +798,10 @@ components:
         emailAddress:
           type: string
           format: email
+        password:
+          description: Overrides the batch password for this mailbox only.
+          type: string
+          minLength: 1
         label:
           type: string
           minLength: 1

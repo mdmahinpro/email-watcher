@@ -14,6 +14,7 @@ import {
 } from "@workspace/api-zod";
 import { testAccountConnection, scanAccount } from "../lib/mail-scanner";
 import { HOSTINGER, hostingerImap, hostingerSmtp } from "../lib/providers";
+import { deriveMailHost } from "../lib/mail-host";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -161,8 +162,15 @@ router.post("/accounts", async (req, res) => {
 });
 
 /**
- * Bulk create for the common case of many mailboxes on one mail server that
- * share a single password (or app password).
+ * Bulk create.
+ *
+ * Server settings default to `mail.<domain>` derived per address, so one paste can
+ * cover mailboxes on many different domains — a single shared host cannot. An
+ * explicit `imapHost`/`smtpHost` overrides that for the whole batch, for the case
+ * where every mailbox really is on one server.
+ *
+ * Passwords work the same way: a mailbox may carry its own, or fall back to the
+ * batch password. Twelve domains almost always means twelve passwords.
  */
 router.post("/accounts/bulk", async (req, res) => {
   const body = CreateAccountsBulkBody.parse(req.body);
@@ -181,18 +189,41 @@ router.post("/accounts/bulk", async (req, res) => {
     }
     seen.add(key);
 
+    const password = entry.password ?? body.password;
+    if (!password) {
+      failed.push({
+        emailAddress,
+        reason:
+          "No password for this mailbox, and no shared password was provided",
+      });
+      continue;
+    }
+
+    // An explicit batch host wins; otherwise derive from this address's domain.
+    const derived = deriveMailHost(emailAddress);
+    const imapHost = body.imapHost ?? derived;
+    const smtpHost = body.smtpHost ?? derived;
+    if (!imapHost || !smtpHost) {
+      failed.push({
+        emailAddress,
+        reason:
+          "Could not derive a mail server from this address. Supply a host explicitly.",
+      });
+      continue;
+    }
+
     candidates.push({
       label: entry.label?.trim() || emailAddress,
       emailAddress,
       provider: "generic",
-      imapHost: body.imapHost,
+      imapHost,
       imapPort: body.imapPort,
       imapSecure: body.imapSecure,
-      smtpHost: body.smtpHost,
+      smtpHost,
       smtpPort: body.smtpPort,
       smtpSecure: body.smtpSecure,
       username: entry.username?.trim() || emailAddress,
-      password: body.password,
+      password,
       captureMode: "keywords",
       active: true,
     });
@@ -206,7 +237,11 @@ router.post("/accounts/bulk", async (req, res) => {
   );
 
   logger.info(
-    { created: created.length, failed: failed.length },
+    {
+      created: created.length,
+      failed: failed.length,
+      derivedHosts: body.imapHost === undefined,
+    },
     "Bulk account create complete",
   );
   res.json({ created, failed });
