@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { HealthCheckResponse } from "@workspace/api-zod";
 import { probeDatabase } from "../lib/db-health";
+import { classifyDatabaseTarget } from "../lib/db-target";
 
 const router: IRouter = Router();
 
@@ -18,6 +19,9 @@ const router: IRouter = Router();
  */
 router.get("/healthz", async (_req, res) => {
   const database = await probeDatabase();
+  // A category, never the raw host: enough to diagnose a misconfigured
+  // deployment from outside, without disclosing the project ref or credentials.
+  const target = classifyDatabaseTarget();
 
   res.json({
     ...HealthCheckResponse.parse({ status: "ok" }),
@@ -26,6 +30,13 @@ router.get("/healthz", async (_req, res) => {
       ? { databaseLatencyMs: database.latencyMs }
       : {}),
     ...(database.error ? { databaseError: database.error } : {}),
+    ...(target
+      ? {
+          databaseTarget: target.kind,
+          databasePort: target.port,
+          ...(target.warning ? { databaseWarning: target.warning } : {}),
+        }
+      : { databaseTarget: "unconfigured" }),
   });
 });
 
