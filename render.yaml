@@ -40,6 +40,11 @@ services:
       # 0.1 CPU / 512 MB, which does not need many either.
       - key: DATABASE_POOL_MAX
         value: "5"
+      # A cold connection to a cross-region managed Postgres costs ~2s (TCP + TLS
+      # + SCRAM is roughly 8 round trips), so allow real headroom. The health
+      # probe has its own, shorter budget.
+      - key: DATABASE_CONNECT_TIMEOUT_MS
+        value: "15000"
       # From: pnpm --filter @workspace/scripts run hash-password
       - key: APP_PASSWORD_HASH
         sync: false

@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { authedRequest } from "../test-support/authed";
+import { resetProbeCache } from "../lib/db-health";
 
 /**
  * Chainable stand-in for the Drizzle query builder.
@@ -1073,6 +1074,9 @@ describe("GET /api/messages/:id", () => {
 
 describe("GET /api/healthz", () => {
   it("reports ok when the database answers", async () => {
+    // The probe caches its result process-wide, so clear it or this inherits a
+    // verdict measured by an earlier test in this file.
+    resetProbeCache();
     dbMock.enqueue({ rows: [{ ok: 1 }] });
 
     const res = await request.get("/api/healthz");
