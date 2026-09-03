@@ -8,6 +8,8 @@ import {
   useCreateAccount,
   useCreateAccountsBulk,
   useUpdateAccount,
+  useTestAllAccounts,
+  useScanAllAccounts,
   getListMessagesQueryKey,
   getGetStatsSummaryQueryKey,
   getGetAccountActivityQueryKey,
@@ -15,6 +17,8 @@ import {
   type EmailAccount,
   type CreateAccountBody,
   type UpdateAccountBody,
+  type BatchTestResult,
+  type BatchScanResult,
 } from "@workspace/api-client-react";
 import { Link } from "wouter";
 import { format } from "date-fns";
@@ -76,6 +80,10 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { distinctDomains, parseMailboxLines } from "@/lib/mailbox-lines";
+import {
+  BatchActionButtons,
+  BatchResultPanel,
+} from "@/components/batch-actions";
 
 const PORT_RANGE = { min: 1, max: 65535 } as const;
 /** Matches the server-side cap in the OpenAPI spec. */
@@ -164,6 +172,11 @@ type DialogState =
 
 export default function Accounts() {
   const [dialogState, setDialogState] = useState<DialogState>(null);
+  const [batchResult, setBatchResult] = useState<
+    | { kind: "test"; data: BatchTestResult }
+    | { kind: "scan"; data: BatchScanResult }
+    | null
+  >(null);
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -289,6 +302,39 @@ export default function Accounts() {
     id: number,
   ) => mutation.isPending && mutation.variables?.id === id;
 
+  const testAll = useTestAllAccounts({
+    mutation: {
+      onSuccess: (data) => {
+        setBatchResult({ kind: "test", data });
+        // A test writes lastError on the account, so the cards must refresh.
+        invalidateAccountViews();
+      },
+      onError: (err) => {
+        toast({
+          title: "Could not test accounts",
+          description: err.message,
+          variant: "destructive",
+        });
+      },
+    },
+  });
+
+  const scanAll = useScanAllAccounts({
+    mutation: {
+      onSuccess: (data) => {
+        setBatchResult({ kind: "scan", data });
+        invalidateAfterScan();
+      },
+      onError: (err) => {
+        toast({
+          title: "Could not scan accounts",
+          description: err.message,
+          variant: "destructive",
+        });
+      },
+    },
+  });
+
   return (
     <div className="space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500 sm:space-y-6">
       {/* Header */}
@@ -305,7 +351,20 @@ export default function Accounts() {
           </p>
         </div>
 
-        <div className="flex flex-col gap-2 sm:flex-row sm:shrink-0">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:shrink-0">
+          <BatchActionButtons
+            onTestAll={() => {
+              setBatchResult(null);
+              testAll.mutate({ params: {} });
+            }}
+            onScanAll={() => {
+              setBatchResult(null);
+              scanAll.mutate({ params: {} });
+            }}
+            isTesting={testAll.isPending}
+            isScanning={scanAll.isPending}
+            disabled={accountsList.length === 0}
+          />
           <Button
             variant="outline"
             className="w-full sm:w-auto"
@@ -323,6 +382,13 @@ export default function Accounts() {
           </Button>
         </div>
       </div>
+
+      {batchResult ? (
+        <BatchResultPanel
+          result={batchResult}
+          onDismiss={() => setBatchResult(null)}
+        />
+      ) : null}
 
       <AccountDialogs
         state={dialogState}

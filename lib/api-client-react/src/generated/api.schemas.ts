@@ -305,6 +305,48 @@ export interface MessageDetail {
   forwardError?: string | null;
 }
 
+export interface AccountTestOutcome {
+  accountId: number;
+  label: string;
+  emailAddress: string;
+  ok: boolean;
+  message: string;
+}
+
+export interface BatchTestResult {
+  /** How many accounts were attempted. */
+  tested: number;
+  succeeded: number;
+  failed: number;
+  results: AccountTestOutcome[];
+}
+
+export interface AccountScanOutcome {
+  accountId: number;
+  label: string;
+  emailAddress: string;
+  /** False when the scan reported a failure for this account. */
+  ok: boolean;
+  scanned: number;
+  matched: number;
+  archived: number;
+  forwarded: number;
+  message: string;
+}
+
+export interface BatchScanResult {
+  /** How many accounts were scanned. */
+  scannedAccounts: number;
+  /** Paused accounts, which are never polled. */
+  skipped: number;
+  totalMatched: number;
+  totalArchived: number;
+  totalForwarded: number;
+  /** Accounts whose scan reported a failure. */
+  failed: number;
+  results: AccountScanOutcome[];
+}
+
 export interface AppSettings {
   keywords: string[];
   forwardToEmail?: string | null;
@@ -367,6 +409,21 @@ export type ListAccountsParams = {
   /**
    * Only return accounts created for this provider.
    */
+  provider?: AccountProvider;
+};
+
+export type TestAllAccountsParams = {
+  /**
+   * Only test accounts of this provider.
+   */
+  provider?: AccountProvider;
+  /**
+   * Skip paused accounts. Defaults to false, so paused ones are tested too.
+   */
+  activeOnly?: boolean;
+};
+
+export type ScanAllAccountsParams = {
   provider?: AccountProvider;
 };
 

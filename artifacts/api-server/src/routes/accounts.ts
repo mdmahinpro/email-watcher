@@ -6,6 +6,8 @@ import {
   CreateAccountsBulkBody,
   CreateHostingerAccountsBody,
   ListAccountsQueryParams,
+  ScanAllAccountsQueryParams,
+  TestAllAccountsQueryParams,
   UpdateAccountBody,
   UpdateAccountParams,
   DeleteAccountParams,
@@ -15,9 +17,19 @@ import {
 import { testAccountConnection, scanAccount } from "../lib/mail-scanner";
 import { HOSTINGER, hostingerImap, hostingerSmtp } from "../lib/providers";
 import { deriveMailHost } from "../lib/mail-host";
+import { mapWithConcurrency } from "../lib/scan-planner";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
+
+/**
+ * How many mail servers to talk to at once in a batch operation.
+ *
+ * Each connection is a TLS session to a different host held for seconds; an
+ * unbounded fan-out over dozens of accounts would exhaust sockets and memory on a
+ * 512 MB free instance. Matches the scheduler's own scan concurrency.
+ */
+const CONNECTION_CONCURRENCY = 4;
 
 /** Only rows that have not been soft-deleted are visible through the API. */
 const notDeleted = isNull(emailAccountsTable.deletedAt);
@@ -332,6 +344,185 @@ router.post("/accounts/hostinger", async (req, res) => {
     "Hostinger account create complete",
   );
   res.json({ created, failed });
+});
+
+/**
+ * Test every account at once.
+ *
+ * Bounded concurrency, because each test opens a TLS connection to a different
+ * mail server and an unbounded fan-out over dozens of accounts would exhaust
+ * sockets on a 512 MB free instance. Per-account failures are reported rather
+ * than thrown, so one unreachable mailbox does not hide the rest — which is the
+ * entire point when triaging a freshly imported batch.
+ *
+ * Paused accounts are included by default: pausing stops polling, but you still
+ * want to know whether a paused account's credentials work before resuming it.
+ */
+router.post("/accounts/test-all", async (req, res) => {
+  const params = TestAllAccountsQueryParams.parse({
+    provider: req.query["provider"],
+    activeOnly:
+      req.query["activeOnly"] === undefined
+        ? undefined
+        : req.query["activeOnly"] === "true",
+  });
+
+  const filters = [notDeleted];
+  if (params.provider !== undefined) {
+    filters.push(eq(emailAccountsTable.provider, params.provider));
+  }
+  if (params.activeOnly) {
+    filters.push(eq(emailAccountsTable.active, true));
+  }
+
+  const accounts = await db
+    .select()
+    .from(emailAccountsTable)
+    .where(and(...filters))
+    .orderBy(asc(emailAccountsTable.createdAt));
+
+  const results: Array<{
+    accountId: number;
+    label: string;
+    emailAddress: string;
+    ok: boolean;
+    message: string;
+  }> = [];
+
+  await mapWithConcurrency(accounts, CONNECTION_CONCURRENCY, async (acct) => {
+    try {
+      const outcome = await testAccountConnection(acct);
+      results.push({
+        accountId: acct.id,
+        label: acct.label,
+        emailAddress: acct.emailAddress,
+        ...outcome,
+      });
+    } catch (err) {
+      // testAccountConnection handles its own failures; this catches anything
+      // unexpected so one account cannot abort the batch.
+      results.push({
+        accountId: acct.id,
+        label: acct.label,
+        emailAddress: acct.emailAddress,
+        ok: false,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // Concurrency means completion order is arbitrary; restore the listing order so
+  // the response lines up with the accounts page.
+  const order = new Map(accounts.map((a, i) => [a.id, i]));
+  results.sort((a, b) => (order.get(a.accountId) ?? 0) - (order.get(b.accountId) ?? 0));
+
+  const succeeded = results.filter((r) => r.ok).length;
+  logger.info(
+    { tested: results.length, succeeded, failed: results.length - succeeded },
+    "Test-all complete",
+  );
+
+  res.json({
+    tested: results.length,
+    succeeded,
+    failed: results.length - succeeded,
+    results,
+  });
+});
+
+/**
+ * Scan every active account now, rather than waiting for the next poll.
+ *
+ * Paused accounts are always skipped: pausing is an instruction not to poll, and
+ * a manual "scan all" overriding that would make the pause meaningless.
+ * `scanAccount` already shares an in-flight scan per account, so this cannot
+ * duplicate work the scheduler is doing.
+ */
+router.post("/accounts/scan-all", async (req, res) => {
+  const params = ScanAllAccountsQueryParams.parse({
+    provider: req.query["provider"],
+  });
+
+  const filters = [notDeleted];
+  if (params.provider !== undefined) {
+    filters.push(eq(emailAccountsTable.provider, params.provider));
+  }
+
+  const all = await db
+    .select()
+    .from(emailAccountsTable)
+    .where(and(...filters))
+    .orderBy(asc(emailAccountsTable.createdAt));
+
+  const active = all.filter((a) => a.active);
+  const skipped = all.length - active.length;
+
+  const results: Array<{
+    accountId: number;
+    label: string;
+    emailAddress: string;
+    ok: boolean;
+    scanned: number;
+    matched: number;
+    archived: number;
+    forwarded: number;
+    message: string;
+  }> = [];
+
+  await mapWithConcurrency(active, CONNECTION_CONCURRENCY, async (acct) => {
+    try {
+      const outcome = await scanAccount(acct);
+      results.push({
+        accountId: acct.id,
+        label: acct.label,
+        emailAddress: acct.emailAddress,
+        // scanAccount reports a failure in its message rather than throwing, so
+        // detect it from the prefix it uses.
+        ok: !outcome.message.startsWith("Scan failed"),
+        ...outcome,
+      });
+    } catch (err) {
+      results.push({
+        accountId: acct.id,
+        label: acct.label,
+        emailAddress: acct.emailAddress,
+        ok: false,
+        scanned: 0,
+        matched: 0,
+        archived: 0,
+        forwarded: 0,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  const order = new Map(active.map((a, i) => [a.id, i]));
+  results.sort((a, b) => (order.get(a.accountId) ?? 0) - (order.get(b.accountId) ?? 0));
+
+  const totals = results.reduce(
+    (acc, r) => ({
+      matched: acc.matched + r.matched,
+      archived: acc.archived + r.archived,
+      forwarded: acc.forwarded + r.forwarded,
+      failed: acc.failed + (r.ok ? 0 : 1),
+    }),
+    { matched: 0, archived: 0, forwarded: 0, failed: 0 },
+  );
+
+  logger.info(
+    { scannedAccounts: results.length, skipped, ...totals },
+    "Scan-all complete",
+  );
+
+  res.json({
+    scannedAccounts: results.length,
+    skipped,
+    totalMatched: totals.matched,
+    totalArchived: totals.archived,
+    totalForwarded: totals.forwarded,
+    failed: totals.failed,
+    results,
+  });
 });
 
 router.patch("/accounts/:id", async (req, res) => {

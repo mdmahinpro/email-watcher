@@ -9,10 +9,10 @@
 /**
  * Where an account's server settings came from. Provenance only: scanning and forwarding treat every account identically.
  */
-export type AccountProvider = typeof AccountProvider[keyof typeof AccountProvider];
-
+export type AccountProvider =
+  (typeof AccountProvider)[keyof typeof AccountProvider];
 
 export const AccountProvider = {
-  generic: 'generic',
-  hostinger: 'hostinger',
+  generic: "generic",
+  hostinger: "hostinger",
 } as const;

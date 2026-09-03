@@ -5,7 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { BulkAccountEntry } from './bulkAccountEntry';
+import type { BulkAccountEntry } from "./bulkAccountEntry";
 
 /**
  * Create many accounts in one request.

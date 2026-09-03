@@ -5,8 +5,8 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { BulkCreateFailure } from './bulkCreateFailure';
-import type { EmailAccount } from './emailAccount';
+import type { BulkCreateFailure } from "./bulkCreateFailure";
+import type { EmailAccount } from "./emailAccount";
 
 export interface BulkCreateResult {
   created: EmailAccount[];

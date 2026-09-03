@@ -174,6 +174,60 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HostingerDefaults"
+  /accounts/test-all:
+    post:
+      operationId: testAllAccounts
+      tags: [accounts]
+      summary: Test every account's IMAP connection
+      description: >-
+        Runs the same check as `/accounts/{id}/test` across all live accounts, a
+        few at a time. Individual failures are reported per account rather than
+        failing the request, so one unreachable mailbox does not hide the rest.
+      parameters:
+        - name: provider
+          in: query
+          required: false
+          description: Only test accounts of this provider.
+          schema:
+            $ref: "#/components/schemas/AccountProvider"
+        - name: activeOnly
+          in: query
+          required: false
+          description: Skip paused accounts. Defaults to false, so paused ones are tested too.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Per-account outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchTestResult"
+  /accounts/scan-all:
+    post:
+      operationId: scanAllAccounts
+      tags: [accounts]
+      summary: Scan every active account now
+      description: >-
+        Runs the same scan the scheduler performs, on demand. Paused accounts are
+        always skipped, because pausing is an instruction not to poll. An account
+        already being scanned reuses that in-flight scan rather than duplicating
+        work.
+      parameters:
+        - name: provider
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/AccountProvider"
+      responses:
+        "200":
+          description: Per-account outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchScanResult"
+
   /accounts/{id}:
     patch:
       operationId: updateAccount
@@ -1085,6 +1139,110 @@ components:
         - bodyTruncated
         - receivedAt
         - createdAt
+
+    BatchTestResult:
+      type: object
+      properties:
+        tested:
+          description: How many accounts were attempted.
+          type: integer
+        succeeded:
+          type: integer
+        failed:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/AccountTestOutcome"
+      required:
+        - tested
+        - succeeded
+        - failed
+        - results
+
+    AccountTestOutcome:
+      type: object
+      properties:
+        accountId:
+          type: integer
+        label:
+          type: string
+        emailAddress:
+          type: string
+        ok:
+          type: boolean
+        message:
+          type: string
+      required:
+        - accountId
+        - label
+        - emailAddress
+        - ok
+        - message
+
+    BatchScanResult:
+      type: object
+      properties:
+        scannedAccounts:
+          description: How many accounts were scanned.
+          type: integer
+        skipped:
+          description: Paused accounts, which are never polled.
+          type: integer
+        totalMatched:
+          type: integer
+        totalArchived:
+          type: integer
+        totalForwarded:
+          type: integer
+        failed:
+          description: Accounts whose scan reported a failure.
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/AccountScanOutcome"
+      required:
+        - scannedAccounts
+        - skipped
+        - totalMatched
+        - totalArchived
+        - totalForwarded
+        - failed
+        - results
+
+    AccountScanOutcome:
+      type: object
+      properties:
+        accountId:
+          type: integer
+        label:
+          type: string
+        emailAddress:
+          type: string
+        ok:
+          description: False when the scan reported a failure for this account.
+          type: boolean
+        scanned:
+          type: integer
+        matched:
+          type: integer
+        archived:
+          type: integer
+        forwarded:
+          type: integer
+        message:
+          type: string
+      required:
+        - accountId
+        - label
+        - emailAddress
+        - ok
+        - scanned
+        - matched
+        - archived
+        - forwarded
+        - message
 
     AppSettings:
       type: object

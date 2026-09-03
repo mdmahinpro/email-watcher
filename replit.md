@@ -133,6 +133,11 @@ See `.env.example` for the Supabase connection-string format.
   drift from the server
 - `POST /accounts/:id/test` — IMAP connection test
 - `POST /accounts/:id/scan` — manual scan trigger
+- `POST /accounts/test-all` (optional `provider`, `activeOnly`) — test every
+  account, 4 at a time. Per-account results; one failure never hides the rest.
+  Paused accounts are included, since you may want to verify one before resuming
+- `POST /accounts/scan-all` (optional `provider`) — scan every active account now.
+  Paused accounts are always skipped, because pausing means do not poll
 - `GET /messages` (`accountId`, `limit`, `offset`), `GET /messages/:id`,
   `DELETE /messages/:id` — keyword matches. The list omits bodies; `:id` returns
   the full message

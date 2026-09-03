@@ -339,6 +339,72 @@ export const GetHostingerDefaultsResponse = zod.object({
 });
 
 /**
+ * Runs the same check as `/accounts/{id}/test` across all live accounts, a few at a time. Individual failures are reported per account rather than failing the request, so one unreachable mailbox does not hide the rest.
+ * @summary Test every account's IMAP connection
+ */
+export const testAllAccountsQueryActiveOnlyDefault = false;
+
+export const TestAllAccountsQueryParams = zod.object({
+  provider: zod
+    .enum(["generic", "hostinger"])
+    .optional()
+    .describe("Only test accounts of this provider."),
+  activeOnly: zod.coerce
+    .boolean()
+    .default(testAllAccountsQueryActiveOnlyDefault)
+    .describe(
+      "Skip paused accounts. Defaults to false, so paused ones are tested too.",
+    ),
+});
+
+export const TestAllAccountsResponse = zod.object({
+  tested: zod.number().describe("How many accounts were attempted."),
+  succeeded: zod.number(),
+  failed: zod.number(),
+  results: zod.array(
+    zod.object({
+      accountId: zod.number(),
+      label: zod.string(),
+      emailAddress: zod.string(),
+      ok: zod.boolean(),
+      message: zod.string(),
+    }),
+  ),
+});
+
+/**
+ * Runs the same scan the scheduler performs, on demand. Paused accounts are always skipped, because pausing is an instruction not to poll. An account already being scanned reuses that in-flight scan rather than duplicating work.
+ * @summary Scan every active account now
+ */
+export const ScanAllAccountsQueryParams = zod.object({
+  provider: zod.enum(["generic", "hostinger"]).optional(),
+});
+
+export const ScanAllAccountsResponse = zod.object({
+  scannedAccounts: zod.number().describe("How many accounts were scanned."),
+  skipped: zod.number().describe("Paused accounts, which are never polled."),
+  totalMatched: zod.number(),
+  totalArchived: zod.number(),
+  totalForwarded: zod.number(),
+  failed: zod.number().describe("Accounts whose scan reported a failure."),
+  results: zod.array(
+    zod.object({
+      accountId: zod.number(),
+      label: zod.string(),
+      emailAddress: zod.string(),
+      ok: zod
+        .boolean()
+        .describe("False when the scan reported a failure for this account."),
+      scanned: zod.number(),
+      matched: zod.number(),
+      archived: zod.number(),
+      forwarded: zod.number(),
+      message: zod.string(),
+    }),
+  ),
+});
+
+/**
  * @summary Update an email account (credentials, endpoints, or active state)
  */
 export const UpdateAccountParams = zod.object({

@@ -9,12 +9,16 @@ import {
   useTestAccount,
   useScanAccount,
   useUpdateAccount,
+  useTestAllAccounts,
+  useScanAllAccounts,
   getListMessagesQueryKey,
   getGetStatsSummaryQueryKey,
   getGetAccountActivityQueryKey,
   getGetKeywordBreakdownQueryKey,
   type EmailAccount,
   type HostingerMailbox,
+  type BatchTestResult,
+  type BatchScanResult,
 } from "@workspace/api-client-react";
 import { format } from "date-fns";
 import {
@@ -62,6 +66,10 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { parseMailboxLines } from "@/lib/mailbox-lines";
+import {
+  BatchActionButtons,
+  BatchResultPanel,
+} from "@/components/batch-actions";
 
 /** Matches the server-side cap in the OpenAPI spec. */
 const MAX_MAILBOXES = 200;
@@ -118,6 +126,11 @@ const STATUS_BADGE: Record<
 export default function Hostinger() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const [batchResult, setBatchResult] = useState<
+    | { kind: "test"; data: BatchTestResult }
+    | { kind: "scan"; data: BatchScanResult }
+    | null
+  >(null);
 
   const listParams = { provider: "hostinger" } as const;
 
@@ -232,20 +245,80 @@ export default function Hostinger() {
     id: number,
   ) => mutation.isPending && mutation.variables?.id === id;
 
+  const testAll = useTestAllAccounts({
+    mutation: {
+      onSuccess: (data) => {
+        setBatchResult({ kind: "test", data });
+        // A test writes lastError on the account, so the cards must refresh.
+        invalidateAccountViews();
+      },
+      onError: (err) => {
+        toast({
+          title: "Could not test mailboxes",
+          description: err.message,
+          variant: "destructive",
+        });
+      },
+    },
+  });
+
+  const scanAll = useScanAllAccounts({
+    mutation: {
+      onSuccess: (data) => {
+        setBatchResult({ kind: "scan", data });
+        invalidateAfterScan();
+      },
+      onError: (err) => {
+        toast({
+          title: "Could not scan mailboxes",
+          description: err.message,
+          variant: "destructive",
+        });
+      },
+    },
+  });
+
   return (
     <div className="space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500 sm:space-y-6">
-      <div className="min-w-0">
-        <h1 className="pin-section-title">Hostinger Mailboxes</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Add Hostinger email accounts with just an address and password. Server
-          settings are filled in automatically, and all incoming mail is archived
-          to{" "}
-          <Link href="/inbox" className="text-sidebar-primary hover:underline">
-            Hostinger Inbox
-          </Link>{" "}
-          without keyword filtering.
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="pin-section-title">Hostinger Mailboxes</h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            Add Hostinger email accounts with just an address and password. Server
+            settings are filled in automatically, and all incoming mail is archived
+            to{" "}
+            <Link href="/inbox" className="text-sidebar-primary hover:underline">
+              Hostinger Inbox
+            </Link>{" "}
+            without keyword filtering.
+          </p>
+        </div>
+
+        {/* Scoped to this provider, so it never touches accounts managed on the
+            Accounts page. */}
+        <div className="flex flex-col gap-2 sm:flex-row sm:shrink-0">
+          <BatchActionButtons
+            onTestAll={() => {
+              setBatchResult(null);
+              testAll.mutate({ params: { provider: "hostinger" } });
+            }}
+            onScanAll={() => {
+              setBatchResult(null);
+              scanAll.mutate({ params: { provider: "hostinger" } });
+            }}
+            isTesting={testAll.isPending}
+            isScanning={scanAll.isPending}
+            disabled={accountsList.length === 0}
+          />
+        </div>
       </div>
+
+      {batchResult ? (
+        <BatchResultPanel
+          result={batchResult}
+          onDismiss={() => setBatchResult(null)}
+        />
+      ) : null}
 
       <ServerSettingsCard defaults={defaults} />
 

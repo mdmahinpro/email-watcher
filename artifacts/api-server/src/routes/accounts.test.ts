@@ -366,6 +366,144 @@ describe("PATCH /api/accounts/:id", () => {
   });
 });
 
+describe("POST /api/accounts/test-all", () => {
+  it("tests every account and summarises the outcome", async () => {
+    // Two accounts; the scanner mock is not installed here, so the real
+    // testAccountConnection runs and fails on DNS. That is fine: what matters is
+    // that every account is attempted and reported, not the specific verdict.
+    dbMock.enqueue([
+      accountRow({ id: 1, emailAddress: "a@nonexistent.invalid" }),
+      accountRow({ id: 2, emailAddress: "b@nonexistent.invalid" }),
+    ]);
+
+    const res = await request.post("/api/accounts/test-all").send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.tested).toBe(2);
+    expect(res.body.succeeded + res.body.failed).toBe(2);
+    expect(res.body.results).toHaveLength(2);
+    // Each row identifies its account so the UI can map results to cards.
+    for (const r of res.body.results) {
+      expect(r).toHaveProperty("accountId");
+      expect(r).toHaveProperty("emailAddress");
+      expect(r).toHaveProperty("ok");
+      expect(typeof r.message).toBe("string");
+    }
+  }, 60_000);
+
+  it("preserves listing order regardless of completion order", async () => {
+    // Concurrency means whichever host answers first finishes first, but the
+    // response must line up with the accounts page.
+    dbMock.enqueue([
+      accountRow({ id: 10, emailAddress: "first@nonexistent.invalid" }),
+      accountRow({ id: 20, emailAddress: "second@nonexistent.invalid" }),
+      accountRow({ id: 30, emailAddress: "third@nonexistent.invalid" }),
+    ]);
+
+    const res = await request.post("/api/accounts/test-all").send({});
+
+    expect(res.body.results.map((r: { accountId: number }) => r.accountId)).toEqual(
+      [10, 20, 30],
+    );
+  }, 60_000);
+
+  it("returns an empty summary when there are no accounts", async () => {
+    dbMock.enqueue([]);
+
+    const res = await request.post("/api/accounts/test-all").send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      tested: 0,
+      succeeded: 0,
+      failed: 0,
+      results: [],
+    });
+  });
+
+  it("accepts a provider filter", async () => {
+    dbMock.enqueue([]);
+
+    const res = await request
+      .post("/api/accounts/test-all?provider=hostinger")
+      .send({});
+
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects an unknown provider", async () => {
+    const res = await request
+      .post("/api/accounts/test-all?provider=gmail")
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(dbMock.countOf("select")).toBe(0);
+  });
+
+  it("never leaks passwords in its results", async () => {
+    dbMock.enqueue([accountRow({ id: 1, password: "top-secret-value" })]);
+
+    const res = await request.post("/api/accounts/test-all").send({});
+
+    expect(JSON.stringify(res.body)).not.toContain("top-secret-value");
+  }, 60_000);
+});
+
+describe("POST /api/accounts/scan-all", () => {
+  it("skips paused accounts and counts them separately", async () => {
+    // Pausing is an instruction not to poll, so a manual scan-all must respect
+    // it rather than overriding it.
+    dbMock.enqueue([
+      accountRow({ id: 1, active: false }),
+      accountRow({ id: 2, active: false }),
+    ]);
+
+    const res = await request.post("/api/accounts/scan-all").send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.skipped).toBe(2);
+    expect(res.body.scannedAccounts).toBe(0);
+    expect(res.body.results).toEqual([]);
+  });
+
+  it("returns totals across accounts", async () => {
+    dbMock.enqueue([]);
+
+    const res = await request.post("/api/accounts/scan-all").send({});
+
+    expect(res.body).toEqual({
+      scannedAccounts: 0,
+      skipped: 0,
+      totalMatched: 0,
+      totalArchived: 0,
+      totalForwarded: 0,
+      failed: 0,
+      results: [],
+    });
+  });
+
+  it("reports a per-account failure without failing the request", async () => {
+    // One unreachable mailbox must not hide the others, which is the whole point
+    // of running the batch while triaging a fresh import.
+    dbMock.enqueue([accountRow({ id: 1, emailAddress: "x@nonexistent.invalid" })]);
+
+    const res = await request.post("/api/accounts/scan-all").send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.scannedAccounts).toBe(1);
+    expect(res.body.results[0].ok).toBe(false);
+    expect(res.body.failed).toBe(1);
+  }, 60_000);
+
+  it("rejects an unknown provider", async () => {
+    const res = await request
+      .post("/api/accounts/scan-all?provider=outlook")
+      .send({});
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("DELETE /api/accounts/:id", () => {
   it("soft-deletes rather than issuing a DELETE, so history is preserved", async () => {
     const res = await request.delete("/api/accounts/7");

@@ -8,8 +8,12 @@
 
 export * from "./accountActivity";
 export * from "./accountProvider";
+export * from "./accountScanOutcome";
+export * from "./accountTestOutcome";
 export * from "./appSettings";
 export * from "./authSession";
+export * from "./batchScanResult";
+export * from "./batchTestResult";
 export * from "./bulkAccountEntry";
 export * from "./bulkCreateAccountsBody";
 export * from "./bulkCreateFailure";
@@ -30,8 +34,10 @@ export * from "./listMessagesParams";
 export * from "./loginBody";
 export * from "./matchedMessage";
 export * from "./messageDetail";
+export * from "./scanAllAccountsParams";
 export * from "./scanResult";
 export * from "./statsSummary";
+export * from "./testAllAccountsParams";
 export * from "./testResult";
 export * from "./updateAccountBody";
 export * from "./updateSettingsBody";

@@ -20,6 +20,8 @@ import type {
   AccountActivity,
   AppSettings,
   AuthSession,
+  BatchScanResult,
+  BatchTestResult,
   BulkCreateAccountsBody,
   BulkCreateResult,
   CreateAccountBody,
@@ -35,8 +37,10 @@ import type {
   LoginBody,
   MatchedMessage,
   MessageDetail,
+  ScanAllAccountsParams,
   ScanResult,
   StatsSummary,
+  TestAllAccountsParams,
   TestResult,
   UpdateAccountBody,
   UpdateSettingsBody,
@@ -795,6 +799,200 @@ export function useGetHostingerDefaults<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * Runs the same check as `/accounts/{id}/test` across all live accounts, a few at a time. Individual failures are reported per account rather than failing the request, so one unreachable mailbox does not hide the rest.
+ * @summary Test every account's IMAP connection
+ */
+export const getTestAllAccountsUrl = (params?: TestAllAccountsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/accounts/test-all?${stringifiedParams}`
+    : `/api/accounts/test-all`;
+};
+
+export const testAllAccounts = async (
+  params?: TestAllAccountsParams,
+  options?: RequestInit,
+): Promise<BatchTestResult> => {
+  return customFetch<BatchTestResult>(getTestAllAccountsUrl(params), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getTestAllAccountsMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof testAllAccounts>>,
+    TError,
+    { params?: TestAllAccountsParams },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof testAllAccounts>>,
+  TError,
+  { params?: TestAllAccountsParams },
+  TContext
+> => {
+  const mutationKey = ["testAllAccounts"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof testAllAccounts>>,
+    { params?: TestAllAccountsParams }
+  > = (props) => {
+    const { params } = props ?? {};
+
+    return testAllAccounts(params, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type TestAllAccountsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof testAllAccounts>>
+>;
+
+export type TestAllAccountsMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Test every account's IMAP connection
+ */
+export const useTestAllAccounts = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof testAllAccounts>>,
+    TError,
+    { params?: TestAllAccountsParams },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof testAllAccounts>>,
+  TError,
+  { params?: TestAllAccountsParams },
+  TContext
+> => {
+  return useMutation(getTestAllAccountsMutationOptions(options));
+};
+
+/**
+ * Runs the same scan the scheduler performs, on demand. Paused accounts are always skipped, because pausing is an instruction not to poll. An account already being scanned reuses that in-flight scan rather than duplicating work.
+ * @summary Scan every active account now
+ */
+export const getScanAllAccountsUrl = (params?: ScanAllAccountsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/accounts/scan-all?${stringifiedParams}`
+    : `/api/accounts/scan-all`;
+};
+
+export const scanAllAccounts = async (
+  params?: ScanAllAccountsParams,
+  options?: RequestInit,
+): Promise<BatchScanResult> => {
+  return customFetch<BatchScanResult>(getScanAllAccountsUrl(params), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getScanAllAccountsMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof scanAllAccounts>>,
+    TError,
+    { params?: ScanAllAccountsParams },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof scanAllAccounts>>,
+  TError,
+  { params?: ScanAllAccountsParams },
+  TContext
+> => {
+  const mutationKey = ["scanAllAccounts"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof scanAllAccounts>>,
+    { params?: ScanAllAccountsParams }
+  > = (props) => {
+    const { params } = props ?? {};
+
+    return scanAllAccounts(params, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ScanAllAccountsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof scanAllAccounts>>
+>;
+
+export type ScanAllAccountsMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Scan every active account now
+ */
+export const useScanAllAccounts = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof scanAllAccounts>>,
+    TError,
+    { params?: ScanAllAccountsParams },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof scanAllAccounts>>,
+  TError,
+  { params?: ScanAllAccountsParams },
+  TContext
+> => {
+  return useMutation(getScanAllAccountsMutationOptions(options));
+};
 
 /**
  * @summary Update an email account (credentials, endpoints, or active state)
