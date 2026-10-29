@@ -130,6 +130,24 @@ vi.mock("../lib/scheduler", () => ({
   restartScheduler: vi.fn(async () => undefined),
 }));
 
+// Host discovery opens real sockets; tests must not depend on the network.
+// The default "nothing found" keeps every derivation test on its fallback path.
+const discoveryMock = vi.hoisted(() => {
+  type Server = { host: string; port: number; secure: boolean } | null;
+  return {
+    discoverImapServer: vi.fn(async (): Promise<Server> => null),
+    discoverSmtpServer: vi.fn(async (): Promise<Server> => null),
+    discoverMailServers: vi.fn(
+      async (): Promise<{ imap: Server; smtp: Server }> => ({
+        imap: null,
+        smtp: null,
+      }),
+    ),
+  };
+});
+
+vi.mock("../lib/mail-discovery", () => discoveryMock);
+
 const { default: app } = await import("../app");
 
 /**
@@ -173,6 +191,15 @@ function accountRow(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   dbMock.reset();
+  discoveryMock.discoverImapServer.mockReset();
+  discoveryMock.discoverSmtpServer.mockReset();
+  discoveryMock.discoverMailServers.mockReset();
+  discoveryMock.discoverImapServer.mockResolvedValue(null);
+  discoveryMock.discoverSmtpServer.mockResolvedValue(null);
+  discoveryMock.discoverMailServers.mockResolvedValue({
+    imap: null,
+    smtp: null,
+  });
 });
 
 describe("PATCH /api/accounts/:id", () => {
@@ -577,6 +604,7 @@ describe("POST /api/accounts/scan-all", () => {
       totalMatched: 0,
       totalArchived: 0,
       totalForwarded: 0,
+      totalNotified: 0,
       failed: 0,
       results: [],
     });
@@ -638,8 +666,7 @@ describe("POST /api/accounts/bulk", () => {
     smtpHost: "smtp.example.com",
   };
 
-  it("derives mail.<domain> per address when no host is given", async () => {
-    // The point of the default: one paste covering several domains, which a
+  it("derives mail.<domain> per address when no host is given", async () => {    // The point of the default: one paste covering several domains, which a
     // single shared host cannot serve.
     dbMock.enqueue(
       [],
@@ -691,6 +718,68 @@ describe("POST /api/accounts/bulk", () => {
       smtpPort: 465,
       smtpSecure: true,
     });
+  });
+
+  it("uses a discovered server instead of the mail.<domain> guess", async () => {
+    // Discovery probes the domain's MX records and conventional hostnames; a
+    // live greeting beats the guess, so the account starts working.
+    discoveryMock.discoverImapServer.mockResolvedValue({
+      host: "mx.realdomain.com",
+      port: 143,
+      secure: false,
+    });
+    discoveryMock.discoverSmtpServer.mockResolvedValue({
+      host: "smtp.realdomain.com",
+      port: 587,
+      secure: false,
+    });
+    dbMock.enqueue([], [accountRow({ id: 11 })]);
+
+    const res = await request.post("/api/accounts/bulk").send({
+      accounts: [{ emailAddress: "a@realdomain.com" }],
+      password: "pw",
+    });
+
+    expect(res.status).toBe(200);
+    const [row] = dbMock.argsOf("values") as [Record<string, unknown>];
+    expect(row).toMatchObject({
+      imapHost: "mx.realdomain.com",
+      imapPort: 143,
+      imapSecure: false,
+      smtpHost: "smtp.realdomain.com",
+      smtpPort: 587,
+      smtpSecure: false,
+    });
+  });
+
+  it("falls back to the derived host when discovery finds nothing", async () => {
+    discoveryMock.discoverImapServer.mockResolvedValue(null);
+    discoveryMock.discoverSmtpServer.mockResolvedValue(null);
+    dbMock.enqueue([], [accountRow({ id: 11 })]);
+
+    const res = await request.post("/api/accounts/bulk").send({
+      accounts: [{ emailAddress: "a@example.com" }],
+      password: "pw",
+    });
+
+    expect(res.status).toBe(200);
+    const [row] = dbMock.argsOf("values") as [Record<string, unknown>];
+    expect(row["imapHost"]).toBe("mail.example.com");
+    expect(row["imapPort"]).toBe(993);
+  });
+
+  it("skips discovery entirely when the batch names its servers", async () => {
+    dbMock.enqueue([], [accountRow({ id: 11 })]);
+
+    await request.post("/api/accounts/bulk").send({
+      accounts: [{ emailAddress: "a@example.com" }],
+      password: "pw",
+      imapHost: "imap.example.com",
+      smtpHost: "smtp.example.com",
+    });
+
+    expect(discoveryMock.discoverImapServer).not.toHaveBeenCalled();
+    expect(discoveryMock.discoverSmtpServer).not.toHaveBeenCalled();
   });
 
   it("an explicit host overrides derivation for the whole batch", async () => {
@@ -1258,6 +1347,271 @@ describe("POST /api/accounts/hostinger", () => {
       });
 
     expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/accounts/:id/discover-host", () => {
+  it("applies a discovered endpoint and drops the stored marks", async () => {
+    discoveryMock.discoverMailServers.mockResolvedValue({
+      imap: { host: "mx.example.com", port: 993, secure: true },
+      smtp: { host: "smtp.example.com", port: 465, secure: true },
+    });
+    dbMock.enqueue(
+      [accountRow({ smtpHost: "smtp.old.example.com" })],
+      [accountRow({ imapHost: "mx.example.com" })],
+    );
+
+    const res = await request.post("/api/accounts/7/discover-host");
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.imapFound).toBe(true);
+    expect(res.body.smtpFound).toBe(true);
+
+    const [patch] = dbMock.argsOf("set") as [Record<string, unknown>];
+    // UIDs from a different server cannot be compared, so the marks reset.
+    expect(patch).toMatchObject({
+      imapHost: "mx.example.com",
+      imapPort: 993,
+      imapSecure: true,
+      smtpHost: "smtp.example.com",
+      lastUidSeen: null,
+      folderMarks: null,
+      lastError: null,
+    });
+    // Credentials are never part of the reply.
+    expect(JSON.stringify(res.body)).not.toContain("stored-secret");
+  });
+
+  it("keeps the marks when discovery agrees with the stored settings", async () => {
+    discoveryMock.discoverMailServers.mockResolvedValue({
+      imap: { host: "imap.example.com", port: 993, secure: true },
+      smtp: { host: "smtp.example.com", port: 465, secure: true },
+    });
+    dbMock.enqueue([accountRow()]);
+
+    const res = await request.post("/api/accounts/7/discover-host");
+
+    expect(res.status).toBe(200);
+    // Nothing to apply, so nothing was written — but the answer says the host
+    // is right and points the operator at the password instead.
+    expect(res.body.ok).toBe(true);
+    expect(res.body.updated).toBeNull();
+    expect(dbMock.countOf("update")).toBe(0);
+    expect(res.body.message).toMatch(/password/i);
+  });
+
+  it("reports when no candidate answered and changes nothing", async () => {
+    discoveryMock.discoverMailServers.mockResolvedValue({
+      imap: null,
+      smtp: null,
+    });
+    dbMock.enqueue([accountRow()]);
+
+    const res = await request.post("/api/accounts/7/discover-host");
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.updated).toBeNull();
+    expect(dbMock.countOf("update")).toBe(0);
+  });
+
+  it("refuses a Hostinger account, whose servers are preset", async () => {
+    dbMock.enqueue([accountRow({ provider: "hostinger" })]);
+
+    const res = await request.post("/api/accounts/7/discover-host");
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(false);
+    // An MX host is a relay, not Hostinger's mailbox server; probing one must
+    // not overwrite working settings.
+    expect(discoveryMock.discoverMailServers).not.toHaveBeenCalled();
+    expect(dbMock.countOf("update")).toBe(0);
+  });
+
+  it("returns 404 for an unknown account", async () => {
+    dbMock.enqueue([]);
+
+    const res = await request.post("/api/accounts/999/discover-host");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("rejects a malformed id", async () => {
+    const res = await request.post("/api/accounts/nope/discover-host");
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/messages/export", () => {
+  const exportRow = (overrides: Record<string, unknown> = {}) => ({
+    id: 1,
+    accountId: 7,
+    accountLabel: "Support",
+    accountEmail: "support@example.com",
+    accountDeletedAt: null,
+    messageUid: "120",
+    folder: "INBOX",
+    messageId: "<abc@example.com>",
+    fromAddress: "rewards@example.com",
+    toAddress: "support@example.com",
+    subject: "Claim your reward",
+    snippet: "You have a reward waiting",
+    bodyText: "The whole text body",
+    bodyHtml: "<p>The whole HTML body</p>",
+    bodyTruncated: false,
+    receivedAt: NOW,
+    createdAt: NOW,
+    matchedKeywords: ["claim"],
+    forwarded: false,
+    forwardError: null,
+    ...overrides,
+  });
+
+  it("exports the selected ids with their full bodies", async () => {
+    dbMock.enqueue([exportRow()]);
+
+    const res = await request
+      .post("/api/messages/export")
+      .send({ ids: [1] });
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body[0]).toMatchObject({
+      subject: "Claim your reward",
+      bodyText: "The whole text body",
+      bodyHtml: "<p>The whole HTML body</p>",
+      matchedKeywords: ["claim"],
+    });
+    // A real download, not just a JSON payload.
+    expect(res.headers["content-disposition"]).toMatch(/attachment/);
+  });
+
+  it("exports by the same filters the list accepts when no ids are given", async () => {
+    dbMock.enqueue([exportRow()]);
+
+    const res = await request
+      .post("/api/messages/export")
+      .send({ search: "reward" });
+
+    expect(res.status).toBe(200);
+    expect(dbMock.countOf("where")).toBe(1);
+    // The cap plus one, so truncation is detectable without a count query.
+    expect(dbMock.argsOf("limit")).toEqual([2001]);
+  });
+
+  it("rejects an invalid date filter", async () => {
+    const res = await request
+      .post("/api/messages/export")
+      .send({ receivedFrom: "not-a-date" });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/messages/delete-bulk", () => {
+  it("deletes every id and reports the unknown ones", async () => {
+    dbMock.enqueue([{ id: 1 }, { id: 2 }]);
+
+    const res = await request
+      .post("/api/messages/delete-bulk")
+      .send({ ids: [1, 2, 999] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toEqual([1, 2]);
+    expect(res.body.notFound).toEqual([999]);
+  });
+
+  it("rejects an empty id list", async () => {
+    const res = await request
+      .post("/api/messages/delete-bulk")
+      .send({ ids: [] });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/messages/recheck-archive", () => {
+  const archivedRow = (overrides: Record<string, unknown> = {}) => ({
+    id: 50,
+    accountId: 7,
+    accountLabelSnapshot: "Support",
+    accountEmailSnapshot: "support@example.com",
+    messageUid: "42",
+    folder: "INBOX",
+    messageId: "<42@example.com>",
+    fromAddress: "promo@example.com",
+    toAddress: "support@example.com",
+    subject: "Your gift is waiting",
+    snippet: "open your gift",
+    bodyText: "Claim the gift inside",
+    bodyHtml: null,
+    bodyTruncated: false,
+    receivedAt: NOW,
+    createdAt: NOW,
+    ...overrides,
+  });
+
+  it("surfaces archived messages that match the current keywords", async () => {
+    dbMock.enqueue(
+      // getSettings
+      [
+        {
+          id: 1,
+          keywords: ["gift"],
+          forwardToEmail: null,
+          pollIntervalSeconds: 120,
+          forwardingEnabled: false,
+          retainBodiesDays: 0,
+          retainMessagesDays: 0,
+          updatedAt: NOW,
+        },
+      ],
+      // first batch of archived rows
+      [archivedRow()],
+      // insert ... returning
+      [{ id: 90 }],
+      // second batch: end of the archive
+      [],
+    );
+
+    const res = await request.post("/api/messages/recheck-archive");
+
+    expect(res.status).toBe(200);
+    expect(res.body.scanned).toBe(1);
+    expect(res.body.inserted).toBe(1);
+
+    const [values] = dbMock.argsOf("values") as [Record<string, unknown>];
+    expect(values["matchedKeywords"]).toEqual(["gift"]);
+    expect(values["messageUid"]).toBe("42");
+    expect(values["forwarded"]).toBe(false);
+  });
+
+  it("leaves non-matching archive rows alone", async () => {
+    dbMock.enqueue(
+      [
+        {
+          id: 1,
+          keywords: ["invoice"],
+          forwardToEmail: null,
+          pollIntervalSeconds: 120,
+          forwardingEnabled: false,
+          retainBodiesDays: 0,
+          retainMessagesDays: 0,
+          updatedAt: NOW,
+        },
+      ],
+      [archivedRow({ subject: "Lunch", bodyText: "see you at noon" })],
+      [],
+    );
+
+    const res = await request.post("/api/messages/recheck-archive");
+
+    expect(res.status).toBe(200);
+    expect(res.body.scanned).toBe(1);
+    expect(res.body.inserted).toBe(0);
+    expect(dbMock.countOf("values")).toBe(0);
   });
 });
 

@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   SESSION_TTL_SECONDS,
   createSessionToken,
+  createViewToken,
   generateSessionSecret,
   hashPassword,
   loadAuthConfig,
   verifyPassword,
   verifySessionToken,
+  verifyViewToken,
 } from "./auth";
 
 const SECRET = "a".repeat(48);
@@ -265,5 +267,76 @@ describe("loadAuthConfig", () => {
 
     expect(state.enabled).toBe(true);
     if (state.enabled) expect(state.config.passwordHash).toBe(validHash);
+  });
+});
+
+describe("view tokens", () => {
+  const passwordHash = hashPassword("pw");
+  const otherPasswordHash = hashPassword("different");
+
+  it("round-trips a token for one message", () => {
+    const token = createViewToken(SECRET, passwordHash, "matched", 42);
+
+    const verdict = verifyViewToken(token, SECRET, passwordHash);
+    expect(verdict).toMatchObject({ valid: true, kind: "matched", id: 42 });
+  });
+
+  it("round-trips an inbox token independently", () => {
+    const token = createViewToken(SECRET, passwordHash, "inbox", 7);
+
+    expect(verifyViewToken(token, SECRET, passwordHash)).toMatchObject({
+      valid: true,
+      kind: "inbox",
+      id: 7,
+    });
+  });
+
+  it("rejects a token signed with a different secret or password", () => {
+    const token = createViewToken(SECRET, passwordHash, "matched", 42);
+
+    expect(verifyViewToken(token, OTHER_SECRET, passwordHash)).toMatchObject({
+      valid: false,
+      reason: "bad-signature",
+    });
+    // A password change must invalidate outstanding links, like sessions.
+    expect(verifyViewToken(token, SECRET, otherPasswordHash)).toMatchObject({
+      valid: false,
+      reason: "bad-signature",
+    });
+  });
+
+  it("rejects tampering with the payload", () => {
+    const token = createViewToken(SECRET, passwordHash, "matched", 42);
+    // 42 -> 43 keeps the shape but changes the signed payload.
+    const tampered = token.replace(/\.42\./, ".43.");
+
+    expect(verifyViewToken(tampered, SECRET, passwordHash)).toMatchObject({
+      valid: false,
+      reason: "bad-signature",
+    });
+  });
+
+  it("rejects an expired token", () => {
+    const token = createViewToken(
+      SECRET,
+      passwordHash,
+      "matched",
+      42,
+      1_000,
+      60,
+    );
+
+    expect(
+      verifyViewToken(token, SECRET, passwordHash, 2_000),
+    ).toMatchObject({ valid: false, reason: "expired" });
+  });
+
+  it("rejects a session token replayed as a view link", () => {
+    const session = createSessionToken(SECRET, passwordHash);
+
+    expect(verifyViewToken(session, SECRET, passwordHash)).toMatchObject({
+      valid: false,
+      reason: "malformed",
+    });
   });
 });

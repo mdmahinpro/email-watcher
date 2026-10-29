@@ -208,6 +208,90 @@ export function verifySessionToken(
   return { valid: true, expiresAt };
 }
 
+/**
+ * Signed, expiring links to a single stored message.
+ *
+ * Telegram alerts carry one of these so the reader can open the exact web
+ * view of the mail without logging into the app first. The same HMAC key
+ * material as sessions is used, but under a distinct domain separator, so a
+ * session token can never be replayed as a view link or the other way round.
+ * Like sessions, changing the app password invalidates every outstanding
+ * link.
+ */
+export const VIEW_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+export type ViewTokenKind = "matched" | "inbox";
+
+function viewSign(
+  payload: string,
+  secret: string,
+  passwordHash: string,
+): string {
+  return base64url(
+    createHmac("sha256", secret)
+      .update("ew-view-v1")
+      .update(passwordHash)
+      .update(payload)
+      .digest(),
+  );
+}
+
+export function createViewToken(
+  secret: string,
+  passwordHash: string,
+  kind: ViewTokenKind,
+  id: number,
+  nowSeconds: number = Math.floor(Date.now() / 1000),
+  ttlSeconds: number = VIEW_TOKEN_TTL_SECONDS,
+): string {
+  const expiresAt = nowSeconds + ttlSeconds;
+  const payload = `${kind}.${id}.${expiresAt}`;
+  return `v1.${payload}.${viewSign(payload, secret, passwordHash)}`;
+}
+
+export type ViewTokenVerdict =
+  | { valid: true; kind: ViewTokenKind; id: number; expiresAt: number }
+  | { valid: false; reason: "malformed" | "bad-signature" | "expired" };
+
+export function verifyViewToken(
+  token: string,
+  secret: string,
+  passwordHash: string,
+  nowSeconds: number = Math.floor(Date.now() / 1000),
+): ViewTokenVerdict {
+  const parts = token.split(".");
+  if (parts.length !== 5 || parts[0] !== "v1") {
+    return { valid: false, reason: "malformed" };
+  }
+
+  const [, kindRaw, idRaw, expiresAtRaw, providedSignature] = parts as [
+    string,
+    string,
+    string,
+    string,
+    string,
+  ];
+  if (kindRaw !== "matched" && kindRaw !== "inbox") {
+    return { valid: false, reason: "malformed" };
+  }
+  const id = Number(idRaw);
+  const expiresAt = Number(expiresAtRaw);
+  if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(expiresAt)) {
+    return { valid: false, reason: "malformed" };
+  }
+
+  const expected = viewSign(`${kindRaw}.${idRaw}.${expiresAtRaw}`, secret, passwordHash);
+  const a = Buffer.from(expected);
+  const b = Buffer.from(providedSignature);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return { valid: false, reason: "bad-signature" };
+  }
+
+  if (expiresAt <= nowSeconds) return { valid: false, reason: "expired" };
+
+  return { valid: true, kind: kindRaw, id, expiresAt };
+}
+
 export interface AuthConfig {
   passwordHash: string;
   sessionSecret: string;

@@ -8,9 +8,19 @@
 
 export interface AppSettings {
   keywords: string[];
+  /** The short list worth interrupting for: a match also pushes a Telegram message with the whole email and a link to its exact web view. */
+  criticalKeywords: string[];
   forwardToEmail?: string | null;
   pollIntervalSeconds: number;
   forwardingEnabled: boolean;
+  /** Push Telegram alerts for critical matches. */
+  telegramEnabled: boolean;
+  /** True when a bot token is stored. The token itself is never returned; send a new one to replace it, and note that every other settings client sends `telegramBotToken` only when replacing it. */
+  telegramBotTokenSet: boolean;
+  /** The chat that receives the alerts. */
+  telegramChatId?: string | null;
+  /** The public address of this app, used to build the web-view links inside Telegram alerts. Falls back to RENDER_EXTERNAL_URL when unset. */
+  appUrl?: string | null;
   /** Drop stored message bodies older than this many days, keeping the row and its snippet. 0 keeps them forever. */
   retainBodiesDays: number;
   /** Delete messages older than this many days outright. 0 keeps them forever. */

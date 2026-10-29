@@ -30,11 +30,13 @@ shown in a dashboard and (optionally) auto-forwarded to a single
 
 ## Database Schema (lib/db/src/schema)
 
-- `email_accounts` — per-inbox IMAP/SMTP credentials and last-seen UID.
+- `email_accounts` — per-inbox IMAP/SMTP credentials and per-folder last-seen
+  UID marks (`folder_marks`; `last_uid_seen` is the INBOX one).
   Soft-deleted via `deleted_at`: removing an account hides it everywhere and
   stops scanning it, but never destroys the messages that reference it.
   `provider` (`generic` | `hostinger`) records where the server settings came
-  from. `capture_mode` (`keywords` | `all`) decides what a scan stores.
+  from. `capture_mode` (`keywords` | `all`) decides what a scan stores —
+  keyword matching itself runs in both modes.
 - `matched_messages` — the keyword triage queue. A row means "this needs
   attention"; it carries the matched keywords and the forwarding outcome, and
   feeds `/messages`, forwarding, and the keyword stats.
@@ -56,19 +58,86 @@ shown in a dashboard and (optionally) auto-forwarded to a single
 - `app_settings` — singleton row with keywords, forward-to address, poll
   interval, forwarding toggle.
 
+## Critical Keywords and Telegram Alerts
+
+Two keyword lists, two behaviours:
+
+- **Regular keywords** (`keywords`): a match is listed in Messages and, in a
+  `keywords` mailbox, forwarded. No push, no interruption.
+- **Critical keywords** (`criticalKeywords`): the short list worth
+  interrupting for. A match is listed like any other AND pushed to Telegram,
+  carrying the whole email — subject, addresses, and the full body, split
+  across as many 4096-character messages as it takes — plus an inline
+  "Open in Email Watcher" button to the exact web view of that message.
+
+Critical matching runs in every capture mode, so a Hostinger mailbox archived
+in full still alerts when something critical lands in it (or in its junk
+folder). Pushes are sent only for newly stored rows, so a rescan cannot spam
+the same match twice, and a Telegram failure never fails the scan — the match
+is already stored, the push just retries with the next one.
+
+Setup lives in Settings: the bot token (from @BotFather, stored once and never
+echoed back — `telegramBotTokenSet` reports presence), the chat id (from
+@userinfobot after messaging the bot once), and the app's public URL used to
+build the button. "Send test message" verifies the stored configuration
+(`POST /settings/telegram-test`).
+
+The button's link is a signed, expiring token (`/view/:token`, 30 days)
+granting exactly one message — the same HMAC key material as sessions, under
+a distinct domain separator, invalidated by a password change. The frontend
+serves it on a public `/view/:token` page that reuses the sandboxed-iframe
+message viewer; see `lib/auth.ts` (`createViewToken`) and `routes/view.ts`.
+
 ## Capture Modes
 
 A scan reads each account's `capture_mode`:
 
-- `keywords` (default for the Accounts page): subject, sender, and body are
-  tested against the configured keywords. Matches go to `matched_messages` and
-  are forwarded if forwarding is on. Non-matches are discarded.
+- `keywords` (default for the Accounts page): subject, sender, recipient,
+  and body are tested against the configured keywords. Matches go to
+  `matched_messages` and are forwarded if forwarding is on. Non-matches are
+  discarded.
 - `all` (default for the Hostinger page): every message is archived to
-  `inbox_messages`. No keyword test runs, and **forwarding is skipped** —
-  relaying every arriving email would invite a mail loop.
+  `inbox_messages`, **and** the keyword test still runs — a hit is also
+  surfaced in `matched_messages`, so no keyword match is lost just because
+  the mailbox archives everything. Forwarding is skipped for matches found
+  in an `all` mailbox: relaying every arriving email would invite a mail loop.
 
 The mode is switchable per account via `PATCH /accounts/:id`. Switching does not
-migrate existing rows; it only changes where future scans write.
+migrate existing rows; it only changes where future scans write. To recover
+matches from mail that is already archived, `POST /messages/recheck-archive`
+re-runs the current keywords over the archive.
+
+## Keyword Matching
+
+The matcher is deliberately broad — its contract is "never miss a keyword that
+is present". `buildKeywordHaystack` (scan-planner.ts) feeds it, for every
+message:
+
+- subject, sender, and recipient addresses,
+- the plain-text body,
+- the HTML body with tags stripped and entities decoded (a `$` split by
+  `&#36;`, an `&` inside `&amp;`),
+- the URL targets of links and images, where keywords routinely hide
+  (`capterra.com/review` in an href that the visible text never repeats).
+
+The HTML part is always included, not only when the text part is empty,
+because the two parts routinely disagree. `<script>`/`<style>` content is
+excluded: it is not human-visible and only produces false positives.
+Matching is case-insensitive substring, so a keyword also matches inside
+larger words (`review` inside `softwarereviews`).
+
+## Folders Scanned
+
+A scan reads INBOX **and** every junk/spam folder the server lists ("Junk",
+"Spam", "Bulk Mail", "Junk E-mail", or the `\Junk` special-use flag). Review
+invitations and reward mails are exactly what spam filters hide, so skipping
+the junk folder was the single biggest way a keyword match got lost. Ordinary
+folders (Sent, Trash, Drafts) are never read.
+
+Progress is tracked per folder in `email_accounts.folder_marks`
+(`{"INBOX": 412, "Junk": 17}`); `last_uid_seen` remains the INBOX mark for
+compatibility. UIDs are only unique within one folder, so a non-INBOX message
+carries the folder in its key (`"Junk:41"`) and in the `folder` column.
 
 ## Database Hosting
 
@@ -121,12 +190,13 @@ See `.env.example` for the Supabase connection-string format.
 - `POST /accounts/delete-bulk` — remove several accounts in one atomic statement,
   soft-deleted the same way. Ids that matched no live account are reported as
   `notFound` rather than erroring, since the requested end state holds either way
-- `POST /accounts/bulk` — create many accounts in one request. Server settings
-  default to `mail.<domain>` derived from each address, so a batch spanning many
-  domains works without naming a host; an explicit `imapHost`/`smtpHost` overrides
-  that for the whole batch. A mailbox may carry its own password or fall back to
-  the batch one. Partial success: each address reports its own outcome, and
-  duplicates or existing addresses are skipped rather than failing the batch
+- `POST /accounts/bulk` — create many accounts in one request. When the batch
+  does not name its servers, each distinct domain's real IMAP/SMTP endpoints are
+  discovered automatically (MX records, conventional hostnames, and a live
+  greeting probe — see Mail Server Discovery), with `mail.<domain>` as the
+  fallback. A mailbox may carry its own password or fall back to the batch one.
+  Partial success: each address reports its own outcome, and duplicates or
+  existing addresses are skipped rather than failing the batch
 - `POST /accounts/hostinger` — create Hostinger mailboxes. Server settings come
   from `src/lib/providers.ts` (imap.hostinger.com:993 SSL, smtp.hostinger.com:465
   SSL or 587 STARTTLS), so the request only carries addresses and passwords. Each
@@ -136,18 +206,40 @@ See `.env.example` for the Supabase connection-string format.
   drift from the server
 - `POST /accounts/:id/test` — IMAP connection test
 - `POST /accounts/:id/scan` — manual scan trigger
+- `POST /accounts/:id/discover-host` — look up the account domain's real mail
+  server and repair its settings; the remedy the connection-error texts point at
 - `POST /accounts/test-all` (optional `provider`, `activeOnly`) — test every
   account, 4 at a time. Per-account results; one failure never hides the rest.
   Paused accounts are included, since you may want to verify one before resuming
 - `POST /accounts/scan-all` (optional `provider`) — scan every active account now.
   Paused accounts are always skipped, because pausing means do not poll
-- `GET /messages` (`accountId`, `limit`, `offset`), `GET /messages/:id`,
-  `DELETE /messages/:id` — keyword matches. The list omits bodies; `:id` returns
-  the full message
-- `GET /inbox` (`accountId`, `provider`, `search`, `limit`, `offset`),
-  `GET /inbox/:id`, `DELETE /inbox/:id` — unfiltered archive. `search` is a
-  case-insensitive substring match over subject, sender, and snippet
-- `GET/PUT /settings`
+- `GET /messages` (`accountId`, `search`, `receivedFrom`, `receivedTo`,
+  `limit`, `offset`), `GET /messages/:id`, `DELETE /messages/:id` — keyword
+  matches. The list omits bodies; `:id` returns the full message. `search` is a
+  case-insensitive substring match over subject, sender, recipient, snippet, and
+  the plain-text body
+- `POST /messages/export` — a JSON download with the whole email for each
+  message: either explicit `ids` (what was ticked) or the same filters the list
+  accepts (what was searched), so every match for a keyword exports in one
+  request. Capped at 2000 rows; the `X-Export-Truncated` header says when
+- `POST /messages/delete-bulk` — remove several matches at once
+- `POST /messages/recheck-archive` — re-run the current keywords over the
+  unfiltered archive and surface the hits in Messages. Recovers matches missed
+  before a keyword was added, or by the older matcher. Safe to repeat; nothing
+  found here is forwarded
+- `GET /inbox` (`accountId`, `provider`, `search`, `receivedFrom`,
+  `receivedTo`, `limit`, `offset`), `GET /inbox/:id`, `DELETE /inbox/:id` —
+  unfiltered archive. `search` covers subject, sender, recipient, snippet, and
+  the plain-text body
+- `POST /inbox/export`, `POST /inbox/delete-bulk` — same selection policy as the
+  messages endpoints, for the archive
+- `GET/PUT /settings` — includes `criticalKeywords`, the Telegram
+  configuration (`telegramEnabled`, `telegramChatId`, `appUrl`; the bot token
+  is write-only — omitted means keep, empty string means clear), and retention
+- `POST /settings/telegram-test` — deliver one real Telegram message with the
+  stored configuration, so setup errors surface during setup
+- `GET /view/:token` — one stored message by signed, expiring link (public;
+  the token is the credential and grants exactly that message)
 - `GET /stats/summary` `/stats/keyword-breakdown` `/stats/account-activity`
 - `GET /auth/session`, `POST /auth/login`, `POST /auth/logout` — the access gate
 - Unmatched `/api/*` paths return a JSON 404 when authenticated, 401 otherwise.
@@ -155,6 +247,27 @@ See `.env.example` for the Supabase connection-string format.
 Every route above except `/healthz` and `/auth/*` requires a session; see Access
 Control. `email_accounts.password` is still stored in plaintext, so the database
 itself remains sensitive.
+
+## Mail Server Discovery
+
+`src/lib/mail-discovery.ts` finds a domain's real mail endpoints: it resolves
+the MX records, probes the conventional hostnames (`mail.`, `imap.`, `smtp.`,
+the bare domain) and the MX hosts in parallel, and keeps the first candidate
+that answers with a real IMAP (`* OK`) or SMTP (`220`) greeting — a greeting,
+not just an open socket, because a web server on the same host also accepts
+the connection.
+
+Used in two places:
+
+- `POST /accounts/bulk` runs it per distinct domain (bounded at 30 domains per
+  request; past that the batch falls back to `mail.<domain>`) so bulk-added
+  accounts stop arriving broken with `ENOTFOUND mail.<domain>` and
+  `ECONNREFUSED`.
+- `POST /accounts/:id/discover-host` ("Auto-fix" on an account card) repairs an
+  existing account: it applies whatever it finds, clears the stored error, and
+  drops the UID marks when the IMAP endpoint changes. Hostinger accounts are
+  refused — their servers are preset, and an MX host is a relay, not the
+  mailbox server.
 
 ## Access Control
 
@@ -329,10 +442,15 @@ pnpm --filter @workspace/scripts run icons
 
 - Pages: Dashboard `/`, Messages `/messages`, Hostinger Inbox `/inbox`,
   Accounts `/accounts`, Hostinger `/hostinger`, Settings `/settings`.
-  - **Messages** — keyword matches only, across all accounts in `keywords` mode.
-  - **Hostinger Inbox** — the unfiltered archive, with search, mailbox filter,
-    and pagination. Deliberately a separate list so an archive of everything
-    cannot bury the keyword queue.
+  - **Messages** — keyword matches only, across all accounts in `keywords`
+    mode (plus hits surfaced from archived mailboxes). Searchable, with
+    per-row selection, select-page, bulk delete, and JSON export — of the
+    selection or of every message matching the current search, full bodies
+    included. "Re-check Archive" re-runs the keywords over the archive.
+  - **Hostinger Inbox** — the unfiltered archive, with search (subject,
+    sender, recipient, snippet, and body), mailbox filter, pagination, and
+    the same selection/delete/export-JSON toolbar. Deliberately a separate
+    list so an archive of everything cannot bury the keyword queue.
   - **Accounts** — the general screen: any IMAP/SMTP server, entered by hand,
     plus a bulk paste. Bulk Add defaults each mailbox to `mail.<its own domain>`
     (matching the usual MX convention for self-hosted domains) and accepts a
@@ -362,7 +480,7 @@ pnpm --filter @workspace/scripts run icons
 - `pnpm run start` — run the built server (serves the SPA too)
 - `pnpm --filter @workspace/scripts run icons` — regenerate favicon/PWA rasters
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- `pnpm --filter @workspace/db run push` — push DB schema changes (local dev; on Render it runs automatically as the service's pre-deploy command, so additive changes arrive with the deploy)
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
 - `pnpm --filter @workspace/web run dev` — run frontend locally
 

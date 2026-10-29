@@ -9,6 +9,13 @@ import { logger } from "../lib/logger";
  * - `/healthz` and `/readyz` are container probes, which run before anyone can
  *   log in. They reveal only whether the process and database are alive.
  * - the `/auth/*` endpoints are the gate itself.
+ *
+ * Plus one prefix:
+ * - `/view/` serves a single stored message by signed, expiring link. The
+ *   HMAC over the message id is the credential — unguessable,
+ *   non-enumerable, and invalidated by a password change — and it grants
+ *   exactly one message, nothing else. Telegram alerts carry these links so
+ *   a critical match can be opened without a session.
  */
 const PUBLIC_PATHS = new Set([
   "/healthz",
@@ -17,6 +24,8 @@ const PUBLIC_PATHS = new Set([
   "/auth/login",
   "/auth/logout",
 ]);
+
+const PUBLIC_PATH_PREFIXES = ["/view/"];
 
 /**
  * Require a valid session for every API route except the few public ones.
@@ -31,7 +40,7 @@ export function requireAuth(
   next: NextFunction,
 ): void {
   // `req.path` here is relative to the router mount point (/api).
-  if (PUBLIC_PATHS.has(req.path)) {
+  if (PUBLIC_PATHS.has(req.path) || PUBLIC_PATH_PREFIXES.some((p) => req.path.startsWith(p))) {
     next();
     return;
   }

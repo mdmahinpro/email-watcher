@@ -32,7 +32,7 @@ export const AccountProvider = {
 } as const;
 
 /**
- * What a scan stores. `keywords` stores only keyword matches into /messages and forwards them. `all` archives every arriving message into /inbox with no keyword test and no forwarding.
+ * What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into /messages and forwards them. `all` also archives every arriving message into /inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in /messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.
  */
 export type CaptureMode = (typeof CaptureMode)[keyof typeof CaptureMode];
 
@@ -189,14 +189,15 @@ export interface BulkCreateAccountsBody {
    */
   password?: string;
   /**
-   * Applies to every mailbox in the batch. Omit to derive `mail.<domain>` from each address individually.
+   * Applies to every mailbox in the batch. Omit to look up each domain's real mail server automatically (MX records and a live probe), falling back to `mail.<domain>`.
    * @minLength 1
    */
   imapHost?: string;
+  /** Omit along with `imapHost` to take the port a discovered server actually answered on; the conventional default is 993. */
   imapPort?: number;
   imapSecure?: boolean;
   /**
-   * Applies to every mailbox in the batch. Omit to derive `mail.<domain>` from each address individually.
+   * Applies to every mailbox in the batch. Omit to look up each domain's real mail server automatically, falling back to `mail.<domain>`.
    * @minLength 1
    */
   smtpHost?: string;
@@ -223,11 +224,13 @@ export interface TestResult {
 
 export interface ScanResult {
   scanned: number;
-  /** Keyword matches stored, for a `keywords` mailbox. Always 0 for an `all` mailbox, which archives instead of matching. */
+  /** Keyword matches stored, in either capture mode. Forwarded ones came from a `keywords` mailbox. */
   matched: number;
   /** Messages archived, for an `all` mailbox. */
   archived: number;
   forwarded: number;
+  /** Critical matches successfully pushed to Telegram. */
+  notified: number;
   message: string;
 }
 
@@ -241,6 +244,8 @@ export interface MatchedMessage {
   /** True when the originating account has since been removed. */
   accountDeleted: boolean;
   messageUid: string;
+  /** IMAP folder the message was read from, such as INBOX or Junk. A message found outside INBOX has the folder prefixed into messageUid as well, so the two always agree. */
+  folder: string;
   messageId?: string | null;
   fromAddress: string;
   toAddress: string;
@@ -266,6 +271,8 @@ export interface InboxMessage {
   /** True when the originating account has since been removed. */
   accountDeleted: boolean;
   messageUid: string;
+  /** IMAP folder the message was read from, such as INBOX or Junk. */
+  folder: string;
   messageId?: string | null;
   fromAddress: string;
   toAddress: string;
@@ -286,6 +293,8 @@ export interface MessageDetail {
   accountEmail: string;
   accountDeleted: boolean;
   messageUid: string;
+  /** IMAP folder the message was read from, such as INBOX or Junk. */
+  folder: string;
   messageId?: string | null;
   fromAddress: string;
   toAddress: string;
@@ -331,6 +340,8 @@ export interface AccountScanOutcome {
   matched: number;
   archived: number;
   forwarded: number;
+  /** Critical matches pushed to Telegram for this account. */
+  notified: number;
   message: string;
 }
 
@@ -342,6 +353,8 @@ export interface BatchScanResult {
   totalMatched: number;
   totalArchived: number;
   totalForwarded: number;
+  /** Critical matches pushed to Telegram across the batch. */
+  totalNotified: number;
   /** Accounts whose scan reported a failure. */
   failed: number;
   results: AccountScanOutcome[];
@@ -362,11 +375,87 @@ export interface BulkDeleteResult {
   notFound: number[];
 }
 
+export interface DeleteMessagesBulkBody {
+  /**
+   * @minItems 1
+   * @maxItems 200
+   */
+  ids: number[];
+}
+
+export interface DeleteInboxMessagesBulkBody {
+  /**
+   * @minItems 1
+   * @maxItems 200
+   */
+  ids: number[];
+}
+
+/**
+ * What to export: explicit `ids` (what was ticked) or, when ids are omitted, every message matching the same filters the list endpoint accepts (what was searched). Omitting both exports everything.
+ */
+export interface ExportMessagesBody {
+  /**
+   * @minItems 1
+   * @maxItems 200
+   */
+  ids?: number[];
+  accountId?: number;
+  search?: string;
+  receivedFrom?: string;
+  receivedTo?: string;
+}
+
+/**
+ * Same selection policy as ExportMessagesBody, for the archive.
+ */
+export interface ExportInboxMessagesBody {
+  /**
+   * @minItems 1
+   * @maxItems 200
+   */
+  ids?: number[];
+  accountId?: number;
+  provider?: AccountProvider;
+  search?: string;
+  receivedFrom?: string;
+  receivedTo?: string;
+}
+
+export interface RecheckArchiveResult {
+  /** Archived messages re-tested with the current keywords. */
+  scanned: number;
+  /** Messages newly surfaced in the Messages queue. Already-matched messages are left alone, so a repeated run reports only new hits. */
+  inserted: number;
+  message: string;
+}
+
+export interface DiscoverHostResult {
+  /** True when a server was found and applied, or when discovery agrees with the stored settings. False when nothing answered or the account is not discoverable (Hostinger). */
+  ok: boolean;
+  imapFound: boolean;
+  smtpFound: boolean;
+  /** The account after the repair, or null when nothing was applied. Credentials are never included. */
+  updated?: EmailAccount | null;
+  /** What was found and what was applied. */
+  message: string;
+}
+
 export interface AppSettings {
   keywords: string[];
+  /** The short list worth interrupting for: a match also pushes a Telegram message with the whole email and a link to its exact web view. */
+  criticalKeywords: string[];
   forwardToEmail?: string | null;
   pollIntervalSeconds: number;
   forwardingEnabled: boolean;
+  /** Push Telegram alerts for critical matches. */
+  telegramEnabled: boolean;
+  /** True when a bot token is stored. The token itself is never returned; send a new one to replace it, and note that every other settings client sends `telegramBotToken` only when replacing it. */
+  telegramBotTokenSet: boolean;
+  /** The chat that receives the alerts. */
+  telegramChatId?: string | null;
+  /** The public address of this app, used to build the web-view links inside Telegram alerts. Falls back to RENDER_EXTERNAL_URL when unset. */
+  appUrl?: string | null;
   /** Drop stored message bodies older than this many days, keeping the row and its snippet. 0 keeps them forever. */
   retainBodiesDays: number;
   /** Delete messages older than this many days outright. 0 keeps them forever. */
@@ -375,10 +464,16 @@ export interface AppSettings {
 
 export interface UpdateSettingsBody {
   keywords?: string[];
+  criticalKeywords?: string[];
   forwardToEmail?: string | null;
   /** @minimum 30 */
   pollIntervalSeconds?: number;
   forwardingEnabled?: boolean;
+  telegramEnabled?: boolean;
+  /** The bot token from @BotFather. Omit to keep the stored one; send an empty string to remove it. */
+  telegramBotToken?: string;
+  telegramChatId?: string | null;
+  appUrl?: string | null;
   /**
    * @minimum 0
    * @maximum 3650
@@ -445,6 +540,18 @@ export type ScanAllAccountsParams = {
 export type ListMessagesParams = {
   accountId?: number;
   /**
+   * Case-insensitive substring match against subject, sender, recipient, snippet, and the plain-text body.
+   */
+  search?: string;
+  /**
+   * Only messages received at or after this ISO timestamp.
+   */
+  receivedFrom?: string;
+  /**
+   * Only messages received at or before this ISO timestamp.
+   */
+  receivedTo?: string;
+  /**
    * @minimum 1
    * @maximum 500
    */
@@ -462,9 +569,17 @@ export type ListInboxMessagesParams = {
    */
   provider?: AccountProvider;
   /**
-   * Case-insensitive substring match against subject, sender, and snippet. Ad-hoc lookup, not a stored keyword.
+   * Case-insensitive substring match against subject, sender, recipient, snippet, and the plain-text body. Ad-hoc lookup, not a stored keyword.
    */
   search?: string;
+  /**
+   * Only messages received at or after this ISO timestamp.
+   */
+  receivedFrom?: string;
+  /**
+   * Only messages received at or before this ISO timestamp.
+   */
+  receivedTo?: string;
   /**
    * @minimum 1
    * @maximum 500

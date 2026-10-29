@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   INITIAL_SCAN_LIMIT,
+  buildKeywordHaystack,
   capBody,
   findKeywordMatches,
+  isJunkFolder,
   makeSnippet,
   mapWithConcurrency,
   resolveScanTargets,
@@ -53,6 +55,106 @@ describe("findKeywordMatches", () => {
 
   it("returns nothing when no keyword is present", () => {
     expect(findKeywordMatches("ordinary newsletter", ["claim", "$"])).toEqual([]);
+  });
+});
+
+describe("isJunkFolder", () => {
+  it("recognizes the folder names providers actually use", () => {
+    for (const path of [
+      "Junk",
+      "junk",
+      "Spam",
+      "spam",
+      "Junk Mail",
+      "junk e-mail",
+      "Bulk Mail",
+      "INBOX.Archive/Junk",
+    ]) {
+      expect(isJunkFolder(path)).toBe(true);
+    }
+  });
+
+  it("leaves ordinary folders alone", () => {
+    for (const path of ["INBOX", "Sent", "Trash", "Drafts", "Archive"]) {
+      expect(isJunkFolder(path)).toBe(false);
+    }
+  });
+});
+
+describe("buildKeywordHaystack", () => {
+  const parts = (over: Partial<Parameters<typeof buildKeywordHaystack>[0]>) => ({
+    subject: "",
+    from: "",
+    to: "",
+    text: "",
+    html: "",
+    ...over,
+  });
+
+  it("matches subject, sender, recipient, and text body", () => {
+    const haystack = buildKeywordHaystack(
+      parts({
+        subject: "Your invoice",
+        from: "billing@x.com",
+        to: "me@x.com",
+        text: "amount due today",
+      }),
+    );
+    for (const kw of ["invoice", "billing", "me@x.com", "amount due"]) {
+      expect(findKeywordMatches(haystack, [kw])).toEqual([kw]);
+    }
+  });
+
+  it("includes the HTML part even when a text part exists", () => {
+    // The two parts routinely disagree: the text part can be a short summary
+    // while the keyword lives in the HTML. The old matcher read only the text.
+    const haystack = buildKeywordHaystack(
+      parts({
+        text: "short plain summary",
+        html: "<p>The secret word is capterra</p>",
+      }),
+    );
+    expect(findKeywordMatches(haystack, ["capterra"])).toEqual(["capterra"]);
+  });
+
+  it("decodes HTML entities so a keyword split by one still matches", () => {
+    const haystack = buildKeywordHaystack(
+      parts({ html: "<p>Claim your &#36;50 and &amp; review</p>" }),
+    );
+    // Hits come back in the configured keyword order.
+    expect(findKeywordMatches(haystack, ["$", "review", "&"])).toEqual([
+      "$",
+      "review",
+      "&",
+    ]);
+  });
+
+  it("matches keywords that appear only inside link and image targets", () => {
+    const haystack = buildKeywordHaystack(
+      parts({
+        text: "no keyword here",
+        html: '<a href="https://www.capterra.com/review">link text</a><img src="https://cdn.example/softwarereviews/x.png">',
+      }),
+    );
+    expect(findKeywordMatches(haystack, ["capterra", "softwarereviews"])).toEqual(
+      ["capterra", "softwarereviews"],
+    );
+  });
+
+  it("ignores script and style content, which is not human-visible text", () => {
+    const haystack = buildKeywordHaystack(
+      parts({
+        html: "<style>.review{color:red}</style><script>var claim = 1;</script><p>hello</p>",
+      }),
+    );
+    expect(findKeywordMatches(haystack, ["review", "claim"])).toEqual([]);
+  });
+
+  it("handles a message with no HTML part at all", () => {
+    const haystack = buildKeywordHaystack(
+      parts({ subject: "s", text: "invoice body" }),
+    );
+    expect(findKeywordMatches(haystack, ["invoice"])).toEqual(["invoice"]);
   });
 });
 

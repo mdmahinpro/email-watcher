@@ -17,6 +17,8 @@ export interface MessageDetail {
   accountEmail: string;
   accountDeleted: boolean;
   messageUid: string;
+  /** IMAP folder the message was read from, such as INBOX or Junk. */
+  folder: string;
   messageId?: string | null;
   fromAddress: string;
   toAddress: string;

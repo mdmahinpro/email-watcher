@@ -19,6 +19,8 @@ export interface DetailRow {
   /** From the joined account row; null means the account still exists. */
   accountDeletedAt: Date | null;
   messageUid: string;
+  /** IMAP folder the message was read from, such as INBOX or Junk. */
+  folder: string;
   messageId: string | null;
   fromAddress: string;
   toAddress: string;

@@ -5,6 +5,7 @@ import {
   integer,
   boolean,
   timestamp,
+  jsonb,
   index,
 } from "drizzle-orm/pg-core";
 
@@ -72,6 +73,21 @@ export const emailAccountsTable = pgTable(
     allowInvalidCert: boolean("allow_invalid_cert").notNull().default(false),
     active: boolean("active").notNull().default(true),
     lastUidSeen: integer("last_uid_seen"),
+    /**
+     * Per-folder UID high-water marks, keyed by IMAP folder path
+     * (`{"INBOX": 412, "Junk": 17}`).
+     *
+     * A scan reads more than INBOX: mail that matters is routinely filtered
+     * into the junk folder, so each scanned folder needs its own progress
+     * mark. UIDs are only unique within one folder, so a shared number would
+     * skip or replay messages whenever folders disagree.
+     *
+     * `lastUidSeen` above remains the INBOX mark; it is kept in sync so old
+     * deployments and the account card keep working. When this map lacks a
+     * folder, the scan treats that folder as never scanned and takes a
+     * first-scan window (newest messages only).
+     */
+    folderMarks: jsonb("folder_marks").$type<Record<string, number>>(),
     lastCheckedAt: timestamp("last_checked_at"),
     lastError: text("last_error"),
     /**

@@ -16,6 +16,8 @@ export interface MatchedMessage {
   /** True when the originating account has since been removed. */
   accountDeleted: boolean;
   messageUid: string;
+  /** IMAP folder the message was read from, such as INBOX or Junk. A message found outside INBOX has the folder prefixed into messageUid as well, so the two always agree. */
+  folder: string;
   messageId?: string | null;
   fromAddress: string;
   toAddress: string;

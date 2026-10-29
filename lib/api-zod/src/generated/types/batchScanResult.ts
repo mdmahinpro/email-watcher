@@ -15,6 +15,8 @@ export interface BatchScanResult {
   totalMatched: number;
   totalArchived: number;
   totalForwarded: number;
+  /** Critical matches pushed to Telegram across the batch. */
+  totalNotified: number;
   /** Accounts whose scan reported a failure. */
   failed: number;
   results: AccountScanOutcome[];

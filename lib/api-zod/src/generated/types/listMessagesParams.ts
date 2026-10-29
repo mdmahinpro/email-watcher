@@ -9,6 +9,18 @@
 export type ListMessagesParams = {
   accountId?: number;
   /**
+   * Case-insensitive substring match against subject, sender, recipient, snippet, and the plain-text body.
+   */
+  search?: string;
+  /**
+   * Only messages received at or after this ISO timestamp.
+   */
+  receivedFrom?: string;
+  /**
+   * Only messages received at or before this ISO timestamp.
+   */
+  receivedTo?: string;
+  /**
    * @minimum 1
    * @maximum 500
    */

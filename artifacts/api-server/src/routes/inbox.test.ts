@@ -290,6 +290,77 @@ describe("DELETE /api/inbox/:id", () => {
   });
 });
 
+describe("POST /api/inbox/export", () => {
+  it("exports the selected ids with their full bodies", async () => {
+    dbMock.enqueue([
+      inboxRow({
+        bodyText: "The whole text body",
+        bodyHtml: "<p>The whole HTML body</p>",
+        bodyTruncated: false,
+        folder: "INBOX",
+      }),
+    ]);
+
+    const res = await request.post("/api/inbox/export").send({ ids: [5] });
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body[0]).toMatchObject({
+      subject: "Order enquiry",
+      bodyText: "The whole text body",
+      bodyHtml: "<p>The whole HTML body</p>",
+    });
+    expect(res.headers["content-disposition"]).toMatch(/attachment/);
+  });
+
+  it("exports by filter when no ids are given", async () => {
+    dbMock.enqueue([
+      inboxRow({
+        bodyText: "body",
+        bodyHtml: null,
+        bodyTruncated: false,
+      }),
+    ]);
+
+    const res = await request
+      .post("/api/inbox/export")
+      .send({ search: "order", provider: "hostinger" });
+
+    expect(res.status).toBe(200);
+    expect(dbMock.argsOf("limit")).toEqual([2001]);
+  });
+
+  it("rejects an invalid date filter", async () => {
+    const res = await request
+      .post("/api/inbox/export")
+      .send({ receivedTo: "yesterday" });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/inbox/delete-bulk", () => {
+  it("deletes every id and reports the unknown ones", async () => {
+    dbMock.enqueue([{ id: 5 }, { id: 6 }]);
+
+    const res = await request
+      .post("/api/inbox/delete-bulk")
+      .send({ ids: [5, 6, 999] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toEqual([5, 6]);
+    expect(res.body.notFound).toEqual([999]);
+  });
+
+  it("rejects an empty id list", async () => {
+    const res = await request
+      .post("/api/inbox/delete-bulk")
+      .send({ ids: [] });
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("GET /api/inbox/:id", () => {
   const detailRow = (overrides: Record<string, unknown> = {}) => ({
     ...inboxRow(),

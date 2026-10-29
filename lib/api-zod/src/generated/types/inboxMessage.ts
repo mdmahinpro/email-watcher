@@ -19,6 +19,8 @@ export interface InboxMessage {
   /** True when the originating account has since been removed. */
   accountDeleted: boolean;
   messageUid: string;
+  /** IMAP folder the message was read from, such as INBOX or Junk. */
+  folder: string;
   messageId?: string | null;
   fromAddress: string;
   toAddress: string;

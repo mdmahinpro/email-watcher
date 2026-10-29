@@ -22,6 +22,7 @@ import Accounts from "@/pages/accounts";
 import Hostinger from "@/pages/hostinger";
 import Settings from "@/pages/settings";
 import Login from "@/pages/login";
+import MessageViewPage from "@/pages/view";
 
 /**
  * A session can expire while the tab is open, or be invalidated by a password
@@ -123,7 +124,14 @@ function App() {
       <TooltipProvider>
         <AuthProvider>
           <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-            <AuthGate />
+            {/* Signed single-message links (from Telegram alerts) render a
+                public page; everything else goes through the auth gate. The
+                page itself fetches through a token-verified public API route
+                and mounts no other component. */}
+            <Switch>
+              <Route path="/view/:token" component={MessageViewPage} />
+              <Route component={AuthGate} />
+            </Switch>
           </WouterRouter>
         </AuthProvider>
         <Toaster />

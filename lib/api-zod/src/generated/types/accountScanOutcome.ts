@@ -16,5 +16,7 @@ export interface AccountScanOutcome {
   matched: number;
   archived: number;
   forwarded: number;
+  /** Critical matches pushed to Telegram for this account. */
+  notified: number;
   message: string;
 }

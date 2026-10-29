@@ -24,14 +24,15 @@ export interface BulkCreateAccountsBody {
    */
   password?: string;
   /**
-   * Applies to every mailbox in the batch. Omit to derive `mail.<domain>` from each address individually.
+   * Applies to every mailbox in the batch. Omit to look up each domain's real mail server automatically (MX records and a live probe), falling back to `mail.<domain>`.
    * @minLength 1
    */
   imapHost?: string;
+  /** Omit along with `imapHost` to take the port a discovered server actually answered on; the conventional default is 993. */
   imapPort?: number;
   imapSecure?: boolean;
   /**
-   * Applies to every mailbox in the batch. Omit to derive `mail.<domain>` from each address individually.
+   * Applies to every mailbox in the batch. Omit to look up each domain's real mail server automatically, falling back to `mail.<domain>`.
    * @minLength 1
    */
   smtpHost?: string;

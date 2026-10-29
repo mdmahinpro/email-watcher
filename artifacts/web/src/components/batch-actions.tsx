@@ -64,6 +64,9 @@ export function BatchResultPanel({
         (result.data.totalForwarded > 0
           ? `, ${result.data.totalForwarded} forwarded`
           : "") +
+        (result.data.totalNotified > 0
+          ? `, ${result.data.totalNotified} Telegram alert${result.data.totalNotified === 1 ? "" : "s"}`
+          : "") +
         (result.data.failed > 0 ? `, ${result.data.failed} failed` : "");
 
   const allGood = failures.length === 0;

@@ -28,7 +28,12 @@ import type {
   CreateAccountBody,
   CreateHostingerAccountsBody,
   DeleteAccountsBulkBody,
+  DeleteInboxMessagesBulkBody,
+  DeleteMessagesBulkBody,
+  DiscoverHostResult,
   EmailAccount,
+  ExportInboxMessagesBody,
+  ExportMessagesBody,
   HealthStatus,
   HostingerDefaults,
   InboxMessage,
@@ -39,6 +44,7 @@ import type {
   LoginBody,
   MatchedMessage,
   MessageDetail,
+  RecheckArchiveResult,
   ScanAllAccountsParams,
   ScanResult,
   StatsSummary,
@@ -1424,6 +1430,91 @@ export const useScanAccount = <
 };
 
 /**
+ * Resolves the account domain's MX records, probes the conventional hostnames and the MX hosts for a live IMAP/SMTP greeting, and writes back whichever endpoint answers first. This is the automatic remedy for a wrong `mail.<domain>` guess — ENOTFOUND, a refused port, a silent timeout. Stored progress marks are dropped when the IMAP endpoint changes, so the next scan takes a fresh first-scan window; history is untouched. Hostinger accounts are refused, because their servers are preset and an MX host is not the mailbox server.
+ * @summary Look up the account's real mail server and repair its settings
+ */
+export const getDiscoverAccountHostUrl = (id: number) => {
+  return `/api/accounts/${id}/discover-host`;
+};
+
+export const discoverAccountHost = async (
+  id: number,
+  options?: RequestInit,
+): Promise<DiscoverHostResult> => {
+  return customFetch<DiscoverHostResult>(getDiscoverAccountHostUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getDiscoverAccountHostMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof discoverAccountHost>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof discoverAccountHost>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["discoverAccountHost"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof discoverAccountHost>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return discoverAccountHost(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DiscoverAccountHostMutationResult = NonNullable<
+  Awaited<ReturnType<typeof discoverAccountHost>>
+>;
+
+export type DiscoverAccountHostMutationError = ErrorType<void>;
+
+/**
+ * @summary Look up the account's real mail server and repair its settings
+ */
+export const useDiscoverAccountHost = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof discoverAccountHost>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof discoverAccountHost>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getDiscoverAccountHostMutationOptions(options));
+};
+
+/**
  * @summary List matched messages (newest first)
  */
 export const getListMessagesUrl = (params?: ListMessagesParams) => {
@@ -1516,6 +1607,261 @@ export function useListMessages<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * Exports the whole email — metadata, keywords, and the complete text and HTML bodies — as a JSON array. Select either explicit `ids` (what was ticked) or the same filters the list accepts (what was searched), so every match for a keyword can be exported in one request regardless of pagination.
+ * @summary Export matched messages to JSON with full bodies
+ */
+export const getExportMessagesUrl = () => {
+  return `/api/messages/export`;
+};
+
+export const exportMessages = async (
+  exportMessagesBody: ExportMessagesBody,
+  options?: RequestInit,
+): Promise<MessageDetail[]> => {
+  return customFetch<MessageDetail[]>(getExportMessagesUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(exportMessagesBody),
+  });
+};
+
+export const getExportMessagesMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof exportMessages>>,
+    TError,
+    { data: BodyType<ExportMessagesBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof exportMessages>>,
+  TError,
+  { data: BodyType<ExportMessagesBody> },
+  TContext
+> => {
+  const mutationKey = ["exportMessages"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof exportMessages>>,
+    { data: BodyType<ExportMessagesBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return exportMessages(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ExportMessagesMutationResult = NonNullable<
+  Awaited<ReturnType<typeof exportMessages>>
+>;
+export type ExportMessagesMutationBody = BodyType<ExportMessagesBody>;
+export type ExportMessagesMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Export matched messages to JSON with full bodies
+ */
+export const useExportMessages = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof exportMessages>>,
+    TError,
+    { data: BodyType<ExportMessagesBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof exportMessages>>,
+  TError,
+  { data: BodyType<ExportMessagesBody> },
+  TContext
+> => {
+  return useMutation(getExportMessagesMutationOptions(options));
+};
+
+/**
+ * @summary Delete several matched messages at once
+ */
+export const getDeleteMessagesBulkUrl = () => {
+  return `/api/messages/delete-bulk`;
+};
+
+export const deleteMessagesBulk = async (
+  deleteMessagesBulkBody: DeleteMessagesBulkBody,
+  options?: RequestInit,
+): Promise<BulkDeleteResult> => {
+  return customFetch<BulkDeleteResult>(getDeleteMessagesBulkUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(deleteMessagesBulkBody),
+  });
+};
+
+export const getDeleteMessagesBulkMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteMessagesBulk>>,
+    TError,
+    { data: BodyType<DeleteMessagesBulkBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteMessagesBulk>>,
+  TError,
+  { data: BodyType<DeleteMessagesBulkBody> },
+  TContext
+> => {
+  const mutationKey = ["deleteMessagesBulk"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteMessagesBulk>>,
+    { data: BodyType<DeleteMessagesBulkBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return deleteMessagesBulk(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteMessagesBulkMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteMessagesBulk>>
+>;
+export type DeleteMessagesBulkMutationBody = BodyType<DeleteMessagesBulkBody>;
+export type DeleteMessagesBulkMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Delete several matched messages at once
+ */
+export const useDeleteMessagesBulk = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteMessagesBulk>>,
+    TError,
+    { data: BodyType<DeleteMessagesBulkBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteMessagesBulk>>,
+  TError,
+  { data: BodyType<DeleteMessagesBulkBody> },
+  TContext
+> => {
+  return useMutation(getDeleteMessagesBulkMutationOptions(options));
+};
+
+/**
+ * Re-tests every archived message with the current keywords, using the same matcher a live scan uses, and surfaces the hits in the Messages queue. Recovers matches that were missed before a keyword was added, or by the older matcher that could not see into HTML entities and link targets. Safe to run repeatedly: already-matched messages are left alone, and nothing found here is forwarded.
+ * @summary Re-run keyword matching over the unfiltered archive
+ */
+export const getRecheckArchiveForMatchesUrl = () => {
+  return `/api/messages/recheck-archive`;
+};
+
+export const recheckArchiveForMatches = async (
+  options?: RequestInit,
+): Promise<RecheckArchiveResult> => {
+  return customFetch<RecheckArchiveResult>(getRecheckArchiveForMatchesUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRecheckArchiveForMatchesMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof recheckArchiveForMatches>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof recheckArchiveForMatches>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["recheckArchiveForMatches"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof recheckArchiveForMatches>>,
+    void
+  > = () => {
+    return recheckArchiveForMatches(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RecheckArchiveForMatchesMutationResult = NonNullable<
+  Awaited<ReturnType<typeof recheckArchiveForMatches>>
+>;
+
+export type RecheckArchiveForMatchesMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Re-run keyword matching over the unfiltered archive
+ */
+export const useRecheckArchiveForMatches = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof recheckArchiveForMatches>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof recheckArchiveForMatches>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getRecheckArchiveForMatchesMutationOptions(options));
+};
 
 /**
  * Bodies are excluded from the list endpoint because they are large; fetch them one message at a time.
@@ -1786,6 +2132,180 @@ export function useListInboxMessages<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * Exports the whole email — metadata and the complete text and HTML bodies — as a JSON array. Select either explicit `ids` or the same filters the list accepts, so every search match can be exported in one request regardless of pagination.
+ * @summary Export archived messages to JSON with full bodies
+ */
+export const getExportInboxMessagesUrl = () => {
+  return `/api/inbox/export`;
+};
+
+export const exportInboxMessages = async (
+  exportInboxMessagesBody: ExportInboxMessagesBody,
+  options?: RequestInit,
+): Promise<MessageDetail[]> => {
+  return customFetch<MessageDetail[]>(getExportInboxMessagesUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(exportInboxMessagesBody),
+  });
+};
+
+export const getExportInboxMessagesMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof exportInboxMessages>>,
+    TError,
+    { data: BodyType<ExportInboxMessagesBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof exportInboxMessages>>,
+  TError,
+  { data: BodyType<ExportInboxMessagesBody> },
+  TContext
+> => {
+  const mutationKey = ["exportInboxMessages"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof exportInboxMessages>>,
+    { data: BodyType<ExportInboxMessagesBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return exportInboxMessages(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ExportInboxMessagesMutationResult = NonNullable<
+  Awaited<ReturnType<typeof exportInboxMessages>>
+>;
+export type ExportInboxMessagesMutationBody = BodyType<ExportInboxMessagesBody>;
+export type ExportInboxMessagesMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Export archived messages to JSON with full bodies
+ */
+export const useExportInboxMessages = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof exportInboxMessages>>,
+    TError,
+    { data: BodyType<ExportInboxMessagesBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof exportInboxMessages>>,
+  TError,
+  { data: BodyType<ExportInboxMessagesBody> },
+  TContext
+> => {
+  return useMutation(getExportInboxMessagesMutationOptions(options));
+};
+
+/**
+ * @summary Delete several archived messages at once
+ */
+export const getDeleteInboxMessagesBulkUrl = () => {
+  return `/api/inbox/delete-bulk`;
+};
+
+export const deleteInboxMessagesBulk = async (
+  deleteInboxMessagesBulkBody: DeleteInboxMessagesBulkBody,
+  options?: RequestInit,
+): Promise<BulkDeleteResult> => {
+  return customFetch<BulkDeleteResult>(getDeleteInboxMessagesBulkUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(deleteInboxMessagesBulkBody),
+  });
+};
+
+export const getDeleteInboxMessagesBulkMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteInboxMessagesBulk>>,
+    TError,
+    { data: BodyType<DeleteInboxMessagesBulkBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteInboxMessagesBulk>>,
+  TError,
+  { data: BodyType<DeleteInboxMessagesBulkBody> },
+  TContext
+> => {
+  const mutationKey = ["deleteInboxMessagesBulk"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteInboxMessagesBulk>>,
+    { data: BodyType<DeleteInboxMessagesBulkBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return deleteInboxMessagesBulk(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteInboxMessagesBulkMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteInboxMessagesBulk>>
+>;
+export type DeleteInboxMessagesBulkMutationBody =
+  BodyType<DeleteInboxMessagesBulkBody>;
+export type DeleteInboxMessagesBulkMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Delete several archived messages at once
+ */
+export const useDeleteInboxMessagesBulk = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteInboxMessagesBulk>>,
+    TError,
+    { data: BodyType<DeleteInboxMessagesBulkBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteInboxMessagesBulk>>,
+  TError,
+  { data: BodyType<DeleteInboxMessagesBulkBody> },
+  TContext
+> => {
+  return useMutation(getDeleteInboxMessagesBulkMutationOptions(options));
+};
 
 /**
  * @summary One archived message, including its full body
@@ -2118,6 +2638,176 @@ export const useUpdateSettings = <
 > => {
   return useMutation(getUpdateSettingsMutationOptions(options));
 };
+
+/**
+ * Verifies the bot token and chat id by delivering one message, so a typo surfaces during setup rather than when a critical match fails to arrive.
+ * @summary Send a test Telegram message with the stored configuration
+ */
+export const getTestTelegramUrl = () => {
+  return `/api/settings/telegram-test`;
+};
+
+export const testTelegram = async (
+  options?: RequestInit,
+): Promise<TestResult> => {
+  return customFetch<TestResult>(getTestTelegramUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getTestTelegramMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof testTelegram>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof testTelegram>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["testTelegram"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof testTelegram>>,
+    void
+  > = () => {
+    return testTelegram(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type TestTelegramMutationResult = NonNullable<
+  Awaited<ReturnType<typeof testTelegram>>
+>;
+
+export type TestTelegramMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Send a test Telegram message with the stored configuration
+ */
+export const useTestTelegram = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof testTelegram>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof testTelegram>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getTestTelegramMutationOptions(options));
+};
+
+/**
+ * Telegram alerts carry a link here so a critical match can be opened without a session. The token is an HMAC over the message id and an expiry, signed with the app's session key material: it cannot be forged or enumerated, it expires on its own (30 days), and changing the app password invalidates it. It grants exactly one message and nothing else.
+ * @summary One stored message by signed, expiring link
+ */
+export const getGetViewMessageUrl = (token: string) => {
+  return `/api/view/${token}`;
+};
+
+export const getViewMessage = async (
+  token: string,
+  options?: RequestInit,
+): Promise<MessageDetail> => {
+  return customFetch<MessageDetail>(getGetViewMessageUrl(token), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetViewMessageQueryKey = (token: string) => {
+  return [`/api/view/${token}`] as const;
+};
+
+export const getGetViewMessageQueryOptions = <
+  TData = Awaited<ReturnType<typeof getViewMessage>>,
+  TError = ErrorType<void>,
+>(
+  token: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getViewMessage>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetViewMessageQueryKey(token);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getViewMessage>>> = ({
+    signal,
+  }) => getViewMessage(token, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!token,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getViewMessage>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetViewMessageQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getViewMessage>>
+>;
+export type GetViewMessageQueryError = ErrorType<void>;
+
+/**
+ * @summary One stored message by signed, expiring link
+ */
+
+export function useGetViewMessage<
+  TData = Awaited<ReturnType<typeof getViewMessage>>,
+  TError = ErrorType<void>,
+>(
+  token: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getViewMessage>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetViewMessageQueryOptions(token, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary Dashboard summary stats

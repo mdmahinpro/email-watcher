@@ -31,6 +31,18 @@ export const SNIPPET_LENGTH = 320;
 export function messageContentColumns() {
   return {
     messageUid: text("message_uid").notNull(),
+    /**
+     * IMAP folder the message was read from, such as `INBOX` or `Junk`.
+     *
+     * Review invitations and reward mails are routinely filtered into the junk
+     * folder, so scans read the junk folders too. The folder is recorded so a
+     * message found in Junk can be told apart from an inbox one, and so exports
+     * say where the mail actually was.
+     *
+     * Rows captured before this column existed default to INBOX, which was the
+     * only folder the scanner read at the time.
+     */
+    folder: text("folder").notNull().default("INBOX"),
     /** RFC 5322 Message-ID, when the source message carried one. */
     messageId: text("message_id"),
     fromAddress: text("from_address").notNull(),

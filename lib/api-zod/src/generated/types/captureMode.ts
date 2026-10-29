@@ -7,7 +7,7 @@
  */
 
 /**
- * What a scan stores. `keywords` stores only keyword matches into /messages and forwards them. `all` archives every arriving message into /inbox with no keyword test and no forwarding.
+ * What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into /messages and forwards them. `all` also archives every arriving message into /inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in /messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.
  */
 export type CaptureMode = (typeof CaptureMode)[keyof typeof CaptureMode];
 

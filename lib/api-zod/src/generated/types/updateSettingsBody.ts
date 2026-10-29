@@ -8,10 +8,16 @@
 
 export interface UpdateSettingsBody {
   keywords?: string[];
+  criticalKeywords?: string[];
   forwardToEmail?: string | null;
   /** @minimum 30 */
   pollIntervalSeconds?: number;
   forwardingEnabled?: boolean;
+  telegramEnabled?: boolean;
+  /** The bot token from @BotFather. Omit to keep the stored one; send an empty string to remove it. */
+  telegramBotToken?: string;
+  telegramChatId?: string | null;
+  appUrl?: string | null;
   /**
    * @minimum 0
    * @maximum 3650

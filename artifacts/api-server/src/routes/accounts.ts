@@ -14,10 +14,17 @@ import {
   DeleteAccountsBulkBody,
   TestAccountParams,
   ScanAccountParams,
+  DiscoverAccountHostParams,
 } from "@workspace/api-zod";
 import { testAccountConnection, scanAccount } from "../lib/mail-scanner";
 import { HOSTINGER, hostingerImap, hostingerSmtp } from "../lib/providers";
-import { deriveMailHost } from "../lib/mail-host";
+import { deriveMailHost, domainOf, distinctDomains } from "../lib/mail-host";
+import {
+  discoverImapServer,
+  discoverSmtpServer,
+  discoverMailServers,
+  type DiscoveredServer,
+} from "../lib/mail-discovery";
 import { mapWithConcurrency } from "../lib/scan-planner";
 import { logger } from "../lib/logger";
 
@@ -32,6 +39,17 @@ const router: IRouter = Router();
  */
 const CONNECTION_CONCURRENCY = 4;
 
+/**
+ * Above this many distinct domains, bulk host discovery is skipped.
+ *
+ * Each domain costs several seconds of probing (a firewalled port drops the
+ * SYN and burns the whole timeout), so a giant paste cannot hold one request
+ * open for minutes. Past the limit the batch falls back to the
+ * `mail.<domain>` convention, and a wrong guess is corrected afterwards with
+ * the per-account Auto-fix button.
+ */
+const BULK_DISCOVERY_DOMAIN_LIMIT = 30;
+
 /** Only rows that have not been soft-deleted are visible through the API. */
 const notDeleted = isNull(emailAccountsTable.deletedAt);
 
@@ -40,6 +58,7 @@ function serialize(a: typeof emailAccountsTable.$inferSelect) {
   const {
     password: _password,
     lastUidSeen: _lastUidSeen,
+    folderMarks: _folderMarks,
     deletedAt: _deletedAt,
     ...rest
   } = a;
@@ -193,6 +212,36 @@ router.post("/accounts/bulk", async (req, res) => {
   const seen = new Set<string>();
   const candidates: Array<typeof emailAccountsTable.$inferInsert> = [];
 
+  // Host discovery: when the batch does not name its servers, look up each
+  // domain's real IMAP/SMTP endpoints (MX records, common hostnames, and a
+  // live greeting probe) instead of trusting the mail.<domain> convention.
+  // The errors this replaces — ENOTFOUND mail.<domain>, ECONNREFUSED,
+  // timeouts — were the reason bulk-added accounts arrived broken.
+  const needsImap = body.imapHost === undefined;
+  const needsSmtp = body.smtpHost === undefined;
+  const discovery = new Map<
+    string,
+    { imap: DiscoveredServer | null; smtp: DiscoveredServer | null }
+  >();
+  if (needsImap || needsSmtp) {
+    const domains = distinctDomains(
+      body.accounts.map((a) => a.emailAddress),
+    );
+    if (domains.length > 0 && domains.length <= BULK_DISCOVERY_DOMAIN_LIMIT) {
+      await mapWithConcurrency(domains, CONNECTION_CONCURRENCY, async (domain) => {
+        discovery.set(domain, {
+          imap: needsImap ? await discoverImapServer(domain) : null,
+          smtp: needsSmtp ? await discoverSmtpServer(domain) : null,
+        });
+      });
+      const found = [...discovery.values()].filter((d) => d.imap).length;
+      logger.info(
+        { domains: domains.length, found },
+        "Bulk add host discovery complete",
+      );
+    }
+  }
+
   for (const entry of body.accounts) {
     const emailAddress = entry.emailAddress.trim();
     const key = emailAddress.toLowerCase();
@@ -213,10 +262,13 @@ router.post("/accounts/bulk", async (req, res) => {
       continue;
     }
 
-    // An explicit batch host wins; otherwise derive from this address's domain.
+    // An explicit batch host wins; otherwise a discovered endpoint wins;
+    // otherwise derive `mail.<domain>` from this address's domain.
+    const domain = domainOf(emailAddress);
+    const found = domain ? discovery.get(domain) : undefined;
     const derived = deriveMailHost(emailAddress);
-    const imapHost = body.imapHost ?? derived;
-    const smtpHost = body.smtpHost ?? derived;
+    const imapHost = body.imapHost ?? found?.imap?.host ?? derived;
+    const smtpHost = body.smtpHost ?? found?.smtp?.host ?? derived;
     if (!imapHost || !smtpHost) {
       failed.push({
         emailAddress,
@@ -231,11 +283,16 @@ router.post("/accounts/bulk", async (req, res) => {
       emailAddress,
       provider: "generic",
       imapHost,
-      imapPort: body.imapPort,
-      imapSecure: body.imapSecure,
+      // A discovered endpoint carries its own port and TLS mode (some hosts
+      // only speak STARTTLS on 143/587). An explicitly supplied value always
+      // wins, then the discovery, then the conventional default — which is why
+      // the spec leaves these optional rather than defaulting at parse time:
+      // a parse-time default would silently override the discovered port.
+      imapPort: body.imapPort ?? found?.imap?.port ?? 993,
+      imapSecure: body.imapSecure ?? found?.imap?.secure ?? true,
       smtpHost,
-      smtpPort: body.smtpPort,
-      smtpSecure: body.smtpSecure,
+      smtpPort: body.smtpPort ?? found?.smtp?.port ?? 465,
+      smtpSecure: body.smtpSecure ?? found?.smtp?.secure ?? true,
       username: entry.username?.trim() || emailAddress,
       password,
       allowInvalidCert: body.allowInvalidCert,
@@ -467,6 +524,7 @@ router.post("/accounts/scan-all", async (req, res) => {
     matched: number;
     archived: number;
     forwarded: number;
+    notified: number;
     message: string;
   }> = [];
 
@@ -492,6 +550,7 @@ router.post("/accounts/scan-all", async (req, res) => {
         matched: 0,
         archived: 0,
         forwarded: 0,
+        notified: 0,
         message: err instanceof Error ? err.message : String(err),
       });
     }
@@ -505,9 +564,10 @@ router.post("/accounts/scan-all", async (req, res) => {
       matched: acc.matched + r.matched,
       archived: acc.archived + r.archived,
       forwarded: acc.forwarded + r.forwarded,
+      notified: acc.notified + r.notified,
       failed: acc.failed + (r.ok ? 0 : 1),
     }),
-    { matched: 0, archived: 0, forwarded: 0, failed: 0 },
+    { matched: 0, archived: 0, forwarded: 0, notified: 0, failed: 0 },
   );
 
   logger.info(
@@ -521,6 +581,7 @@ router.post("/accounts/scan-all", async (req, res) => {
     totalMatched: totals.matched,
     totalArchived: totals.archived,
     totalForwarded: totals.forwarded,
+    totalNotified: totals.notified,
     failed: totals.failed,
     results,
   });
@@ -602,6 +663,9 @@ router.patch("/accounts/:id", async (req, res) => {
       body.emailAddress !== existing.emailAddress);
   if (mailboxChanged) {
     patch.lastUidSeen = null;
+    // Per-folder marks are meaningless for the same reason — and they cover
+    // the junk folders the single mark never knew about.
+    patch.folderMarks = null;
   }
 
   // A stored failure describes the old connection settings, so clear it when the
@@ -670,13 +734,145 @@ router.post("/accounts/:id/scan", async (req, res) => {
     res.status(404).json({
       scanned: 0,
       matched: 0,
+      archived: 0,
       forwarded: 0,
+      notified: 0,
       message: "Account not found",
     });
     return;
   }
   const result = await scanAccount(acct);
   res.json(result);
+});
+
+/**
+ * Look up this account's real mail server and repair its settings.
+ *
+ * Runs the same discovery bulk add uses — the domain's MX records,
+ * conventional hostnames, and a live greeting probe — against the account's
+ * own domain, then writes back whatever answers first. This is the remedy the
+ * connection errors point at: `ENOTFOUND mail.<domain>`, a refused 993, a
+ * silent timeout.
+ *
+ * Progress marks are dropped when the IMAP endpoint actually changes: UIDs
+ * from a different server cannot be compared, so the next scan takes a fresh
+ * first-scan window. Stored messages keep their own snapshots, so history is
+ * unaffected. Discovery failing touches nothing — the operator's manual
+ * configuration might still be right, and this probe has no opinion.
+ *
+ * Hostinger accounts are refused: their servers are preset from Hostinger's
+ * published settings, and an MX host found here is a relay, not the mailbox
+ * server — "fixing" one that way would break a working account.
+ */
+router.post("/accounts/:id/discover-host", async (req, res) => {
+  const { id } = DiscoverAccountHostParams.parse({
+    id: Number(req.params["id"]),
+  });
+  const acct = await findLiveAccount(id);
+  if (!acct) {
+    res.status(404).json({
+      ok: false,
+      imapFound: false,
+      smtpFound: false,
+      updated: null,
+      message: "Account not found",
+    });
+    return;
+  }
+
+  if (acct.provider === "hostinger") {
+    res.json({
+      ok: false,
+      imapFound: false,
+      smtpFound: false,
+      updated: serialize(acct),
+      message:
+        "Hostinger accounts use Hostinger's own preset servers. Check the " +
+        "password, or edit the account by hand.",
+    });
+    return;
+  }
+
+  const domain = domainOf(acct.emailAddress) ?? acct.emailAddress;
+  const { imap, smtp } = await discoverMailServers(domain);
+
+  const patch: Partial<typeof emailAccountsTable.$inferInsert> = {};
+  const sameImap =
+    imap !== null &&
+    imap.host === acct.imapHost &&
+    imap.port === acct.imapPort &&
+    imap.secure === acct.imapSecure;
+  const sameSmtp =
+    smtp !== null &&
+    smtp.host === acct.smtpHost &&
+    smtp.port === acct.smtpPort &&
+    smtp.secure === acct.smtpSecure;
+
+  if (imap && !sameImap) {
+    patch.imapHost = imap.host;
+    patch.imapPort = imap.port;
+    patch.imapSecure = imap.secure;
+  }
+  if (smtp && !sameSmtp) {
+    patch.smtpHost = smtp.host;
+    patch.smtpPort = smtp.port;
+    patch.smtpSecure = smtp.secure;
+  }
+
+  const parts = [
+    imap
+      ? sameImap
+        ? `IMAP ${imap.host}:${imap.port} (unchanged)`
+        : `IMAP ${imap.host}:${imap.port} (${imap.secure ? "SSL" : "STARTTLS"})`
+      : "IMAP not found",
+    smtp
+      ? sameSmtp
+        ? `SMTP ${smtp.host}:${smtp.port} (unchanged)`
+        : `SMTP ${smtp.host}:${smtp.port}`
+      : "SMTP not found",
+  ];
+
+  if (Object.keys(patch).length === 0) {
+    // Nothing new to apply. Discovery agreeing with the stored settings is
+    // still useful: it says the connection error is not about the host.
+    res.json({
+      ok: imap !== null || smtp !== null,
+      imapFound: imap !== null,
+      smtpFound: smtp !== null,
+      updated: null,
+      message:
+        parts.join(", ") +
+        ". The server settings look right, so the failure is likely the " +
+        "password or the provider blocking IMAP.",
+    });
+    return;
+  }
+
+  // A changed IMAP endpoint invalidates every stored UID mark.
+  if (patch.imapHost !== undefined) {
+    patch.lastUidSeen = null;
+    patch.folderMarks = null;
+  }
+  patch.lastError = null;
+
+  const [updated] = await db
+    .update(emailAccountsTable)
+    .set(patch)
+    .where(and(eq(emailAccountsTable.id, id), notDeleted))
+    .returning();
+
+  logger.info(
+    { accountId: id, ...patch },
+    "Account server settings repaired by discovery",
+  );
+
+  res.json({
+    ok: true,
+    imapFound: imap !== null,
+    smtpFound: smtp !== null,
+    updated: serialize(updated!),
+    message: `Updated to ${parts.join(", ")}.`,
+  });
 });
 
 export default router;

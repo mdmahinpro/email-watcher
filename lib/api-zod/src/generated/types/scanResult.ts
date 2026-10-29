@@ -8,10 +8,12 @@
 
 export interface ScanResult {
   scanned: number;
-  /** Keyword matches stored, for a `keywords` mailbox. Always 0 for an `all` mailbox, which archives instead of matching. */
+  /** Keyword matches stored, in either capture mode. Forwarded ones came from a `keywords` mailbox. */
   matched: number;
   /** Messages archived, for an `all` mailbox. */
   archived: number;
   forwarded: number;
+  /** Critical matches successfully pushed to Telegram. */
+  notified: number;
   message: string;
 }

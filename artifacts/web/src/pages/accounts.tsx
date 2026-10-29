@@ -11,6 +11,7 @@ import {
   useTestAllAccounts,
   useScanAllAccounts,
   useDeleteAccountsBulk,
+  useDiscoverAccountHost,
   getListMessagesQueryKey,
   getGetStatsSummaryQueryKey,
   getGetAccountActivityQueryKey,
@@ -39,6 +40,7 @@ import {
   PauseCircle,
   Users,
   Globe,
+  Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -256,13 +258,39 @@ export default function Accounts() {
       onSuccess: (data) => {
         toast({
           title: "Scan Complete",
-          description: `Scanned ${data.scanned}, Matched ${data.matched}, Forwarded ${data.forwarded}`,
+          description: `Scanned ${data.scanned}, Matched ${data.matched}, Forwarded ${data.forwarded}${
+            data.notified ? `, Notified ${data.notified} via Telegram` : ""
+          }`,
         });
         invalidateAfterScan();
       },
       onError: (err) => {
         toast({
           title: "Scan failed",
+          description: err.message,
+          variant: "destructive",
+        });
+      },
+    },
+  });
+
+  // Auto-fix: look up the domain's real mail server (MX records + a live
+  // greeting probe) and repair this account's settings. Offered on every
+  // generic account card, since a wrong mail.<domain> guess is the most
+  // common reason a freshly added account fails.
+  const discoverHost = useDiscoverAccountHost({
+    mutation: {
+      onSuccess: (data) => {
+        toast({
+          title: data.ok ? "Server settings repaired" : "Nothing to repair",
+          description: data.message,
+          ...(data.ok ? {} : { variant: "destructive" as const }),
+        });
+        invalidateAccountViews();
+      },
+      onError: (err) => {
+        toast({
+          title: "Auto-fix failed",
           description: err.message,
           variant: "destructive",
         });
@@ -683,7 +711,7 @@ export default function Accounts() {
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 bg-white/[0.02] px-3 py-2.5 sm:px-5 sm:py-3">
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <Button
                       variant="outline"
                       size="sm"
@@ -708,6 +736,25 @@ export default function Accounts() {
                       />
                       Scan
                     </Button>
+                    {account.provider !== "hostinger" ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="rounded-full text-xs"
+                        title="Look up the real mail server from the domain's MX record and a live probe, and repair this account's settings. Fixes a wrong mail.<domain> guess, a refused port, or a silent timeout."
+                        disabled={isBusy(discoverHost, account.id)}
+                        onClick={() => discoverHost.mutate({ id: account.id })}
+                      >
+                        <Wrench
+                          className={`mr-1.5 h-3.5 w-3.5 ${
+                            isBusy(discoverHost, account.id) ? "animate-spin" : ""
+                          }`}
+                        />
+                        {isBusy(discoverHost, account.id)
+                          ? "Fixing..."
+                          : "Auto-fix"}
+                      </Button>
+                    ) : null}
                   </div>
 
                   {/* gap-1 (not gap-0.5): these were three 32px targets 2px
@@ -1360,9 +1407,11 @@ function BulkAccountForm({
           Bulk Add Accounts
         </DialogTitle>
         <DialogDescription>
-          Each address gets <code className="font-mono">mail.&lt;its own domain&gt;</code>{" "}
-          by default, so a list spanning several domains works in one paste. Fix
-          any that differ by editing the account afterwards.
+          Each address gets its server looked up automatically — the domain's
+          MX record and the usual hostnames are probed for a live mail server,
+          with <code className="font-mono">mail.&lt;its own domain&gt;</code> as
+          the fallback — so a list spanning several domains works in one paste.
+          Fix any that differ by editing the account afterwards.
         </DialogDescription>
       </DialogHeader>
 
@@ -1422,8 +1471,8 @@ function BulkAccountForm({
             )}
           />
 
-          {/* Show exactly which servers will be used, so a wrong guess is caught
-              before 12 broken accounts are created. */}
+          {/* Show exactly which servers will be tried, so a wrong guess is
+              caught before 12 broken accounts are created. */}
           {derivingHosts && domains.length > 0 ? (
             <div className="rounded-xl border border-white/10 bg-black/20 p-3">
               <span className="pin-meta-label mb-2">
@@ -1434,12 +1483,16 @@ function BulkAccountForm({
                   <li key={d} className="pin-break font-mono text-xs">
                     <span className="text-muted-foreground">{d}</span>
                     {" → "}
-                    <span className="text-foreground">mail.{d}</span>
+                    <span className="text-foreground">
+                      auto-detected (fallback mail.{d})
+                    </span>
                   </li>
                 ))}
               </ul>
               <p className="mt-2 text-xs text-muted-foreground">
-                Set a host below to override this for every address instead.
+                The server is found per domain via its MX record and a live
+                probe, then verified when the accounts are added. Set a host
+                below to force one server for every address instead.
               </p>
             </div>
           ) : null}
@@ -1477,7 +1530,7 @@ function BulkAccountForm({
             hostName="imapHost"
             portName="imapPort"
             secureName="imapSecure"
-            hostPlaceholder="Leave blank to use mail.<domain>"
+            hostPlaceholder="Leave blank to auto-detect"
           />
 
           <ServerFieldsetBulk
@@ -1486,7 +1539,7 @@ function BulkAccountForm({
             hostName="smtpHost"
             portName="smtpPort"
             secureName="smtpSecure"
-            hostPlaceholder="Leave blank to use mail.<domain>"
+            hostPlaceholder="Leave blank to auto-detect"
           />
 
           <FormField

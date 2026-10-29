@@ -328,6 +328,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ScanResult"
+  /accounts/{id}/discover-host:
+    post:
+      operationId: discoverAccountHost
+      tags: [accounts]
+      summary: Look up the account's real mail server and repair its settings
+      description: >-
+        Resolves the account domain's MX records, probes the conventional
+        hostnames and the MX hosts for a live IMAP/SMTP greeting, and writes
+        back whichever endpoint answers first. This is the automatic remedy
+        for a wrong `mail.<domain>` guess — ENOTFOUND, a refused port, a silent
+        timeout. Stored progress marks are dropped when the IMAP endpoint
+        changes, so the next scan takes a fresh first-scan window; history is
+        untouched. Hostinger accounts are refused, because their servers are
+        preset and an MX host is not the mailbox server.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: What discovery found and what was applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiscoverHostResult"
+        "404":
+          description: Account not found
 
   /messages:
     get:
@@ -340,6 +369,26 @@ paths:
           required: false
           schema:
             type: integer
+        - name: search
+          in: query
+          required: false
+          description: >-
+            Case-insensitive substring match against subject, sender,
+            recipient, snippet, and the plain-text body.
+          schema:
+            type: string
+        - name: receivedFrom
+          in: query
+          required: false
+          description: Only messages received at or after this ISO timestamp.
+          schema:
+            type: string
+        - name: receivedTo
+          in: query
+          required: false
+          description: Only messages received at or before this ISO timestamp.
+          schema:
+            type: string
         - name: limit
           in: query
           required: false
@@ -364,6 +413,69 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/MatchedMessage"
+  /messages/export:
+    post:
+      operationId: exportMessages
+      tags: [messages]
+      summary: Export matched messages to JSON with full bodies
+      description: >-
+        Exports the whole email — metadata, keywords, and the complete text and
+        HTML bodies — as a JSON array. Select either explicit `ids` (what was
+        ticked) or the same filters the list accepts (what was searched), so
+        every match for a keyword can be exported in one request regardless of
+        pagination.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExportMessagesBody"
+      responses:
+        "200":
+          description: Full messages, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MessageDetail"
+  /messages/delete-bulk:
+    post:
+      operationId: deleteMessagesBulk
+      tags: [messages]
+      summary: Delete several matched messages at once
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteMessagesBulkBody"
+      responses:
+        "200":
+          description: Which ids were deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkDeleteResult"
+  /messages/recheck-archive:
+    post:
+      operationId: recheckArchiveForMatches
+      tags: [messages]
+      summary: Re-run keyword matching over the unfiltered archive
+      description: >-
+        Re-tests every archived message with the current keywords, using the
+        same matcher a live scan uses, and surfaces the hits in the Messages
+        queue. Recovers matches that were missed before a keyword was added, or
+        by the older matcher that could not see into HTML entities and link
+        targets. Safe to run repeatedly: already-matched messages are left
+        alone, and nothing found here is forwarded.
+      responses:
+        "200":
+          description: Re-check summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecheckArchiveResult"
   /messages/{id}:
     get:
       operationId: getMessage
@@ -426,8 +538,21 @@ paths:
           in: query
           required: false
           description: >-
-            Case-insensitive substring match against subject, sender, and
-            snippet. Ad-hoc lookup, not a stored keyword.
+            Case-insensitive substring match against subject, sender,
+            recipient, snippet, and the plain-text body. Ad-hoc lookup, not a
+            stored keyword.
+          schema:
+            type: string
+        - name: receivedFrom
+          in: query
+          required: false
+          description: Only messages received at or after this ISO timestamp.
+          schema:
+            type: string
+        - name: receivedTo
+          in: query
+          required: false
+          description: Only messages received at or before this ISO timestamp.
           schema:
             type: string
         - name: limit
@@ -454,6 +579,49 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/InboxMessage"
+  /inbox/export:
+    post:
+      operationId: exportInboxMessages
+      tags: [inbox]
+      summary: Export archived messages to JSON with full bodies
+      description: >-
+        Exports the whole email — metadata and the complete text and HTML
+        bodies — as a JSON array. Select either explicit `ids` or the same
+        filters the list accepts, so every search match can be exported in one
+        request regardless of pagination.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExportInboxMessagesBody"
+      responses:
+        "200":
+          description: Full messages, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MessageDetail"
+  /inbox/delete-bulk:
+    post:
+      operationId: deleteInboxMessagesBulk
+      tags: [inbox]
+      summary: Delete several archived messages at once
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteInboxMessagesBulkBody"
+      responses:
+        "200":
+          description: Which ids were deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkDeleteResult"
   /inbox/{id}:
     get:
       operationId: getInboxMessage
@@ -517,6 +685,51 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AppSettings"
+  /settings/telegram-test:
+    post:
+      operationId: testTelegram
+      tags: [settings]
+      summary: Send a test Telegram message with the stored configuration
+      description: >-
+        Verifies the bot token and chat id by delivering one message, so a
+        typo surfaces during setup rather than when a critical match fails to
+        arrive.
+      responses:
+        "200":
+          description: Delivery outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestResult"
+
+  /view/{token}:
+    get:
+      operationId: getViewMessage
+      tags: [messages]
+      summary: One stored message by signed, expiring link
+      description: >-
+        Telegram alerts carry a link here so a critical match can be opened
+        without a session. The token is an HMAC over the message id and an
+        expiry, signed with the app's session key material: it cannot be
+        forged or enumerated, it expires on its own (30 days), and changing
+        the app password invalidates it. It grants exactly one message and
+        nothing else.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: The message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageDetail"
+        "404":
+          description: Link invalid or expired, or the message no longer stored
 
   /stats/summary:
     get:
@@ -603,9 +816,12 @@ components:
 
     CaptureMode:
       description: >-
-        What a scan stores. `keywords` stores only keyword matches into
-        /messages and forwards them. `all` archives every arriving message into
-        /inbox with no keyword test and no forwarding.
+        What a scan stores in addition to keyword matching. `keywords` stores
+        only keyword matches into /messages and forwards them. `all` also
+        archives every arriving message into /inbox. Keyword matching itself
+        runs in both modes — a match in an archived mailbox still lands in
+        /messages — only forwarding is reserved for `keywords`, because
+        relaying every arriving email would be a mail loop.
       type: string
       enum:
         - keywords
@@ -868,28 +1084,29 @@ components:
           minLength: 1
         imapHost:
           description: >-
-            Applies to every mailbox in the batch. Omit to derive
-            `mail.<domain>` from each address individually.
+            Applies to every mailbox in the batch. Omit to look up each
+            domain's real mail server automatically (MX records and a live
+            probe), falling back to `mail.<domain>`.
           type: string
           minLength: 1
         imapPort:
+          description: >-
+            Omit along with `imapHost` to take the port a discovered server
+            actually answered on; the conventional default is 993.
           type: integer
-          default: 993
         imapSecure:
           type: boolean
-          default: true
         smtpHost:
           description: >-
-            Applies to every mailbox in the batch. Omit to derive
-            `mail.<domain>` from each address individually.
+            Applies to every mailbox in the batch. Omit to look up each
+            domain's real mail server automatically, falling back to
+            `mail.<domain>`.
           type: string
           minLength: 1
         smtpPort:
           type: integer
-          default: 465
         smtpSecure:
           type: boolean
-          default: true
         allowInvalidCert:
           description: >-
             Applies to every mailbox in the batch. Shared cPanel hosting commonly
@@ -962,13 +1179,16 @@ components:
           type: integer
         matched:
           description: >-
-            Keyword matches stored, for a `keywords` mailbox. Always 0 for an
-            `all` mailbox, which archives instead of matching.
+            Keyword matches stored, in either capture mode. Forwarded ones
+            came from a `keywords` mailbox.
           type: integer
         archived:
           description: Messages archived, for an `all` mailbox.
           type: integer
         forwarded:
+          type: integer
+        notified:
+          description: Critical matches successfully pushed to Telegram.
           type: integer
         message:
           type: string
@@ -977,6 +1197,7 @@ components:
         - matched
         - archived
         - forwarded
+        - notified
         - message
 
     MatchedMessage:
@@ -998,6 +1219,12 @@ components:
           description: True when the originating account has since been removed.
           type: boolean
         messageUid:
+          type: string
+        folder:
+          description: >-
+            IMAP folder the message was read from, such as INBOX or Junk.
+            A message found outside INBOX has the folder prefixed into
+            messageUid as well, so the two always agree.
           type: string
         messageId:
           type: string
@@ -1030,6 +1257,7 @@ components:
         - accountEmail
         - accountDeleted
         - messageUid
+        - folder
         - fromAddress
         - toAddress
         - subject
@@ -1062,6 +1290,9 @@ components:
           type: boolean
         messageUid:
           type: string
+        folder:
+          description: IMAP folder the message was read from, such as INBOX or Junk.
+          type: string
         messageId:
           type: string
           nullable: true
@@ -1084,6 +1315,7 @@ components:
         - accountEmail
         - accountDeleted
         - messageUid
+        - folder
         - fromAddress
         - toAddress
         - subject
@@ -1111,6 +1343,9 @@ components:
         accountDeleted:
           type: boolean
         messageUid:
+          type: string
+        folder:
+          description: IMAP folder the message was read from, such as INBOX or Junk.
           type: string
         messageId:
           type: string
@@ -1157,6 +1392,7 @@ components:
         - accountEmail
         - accountDeleted
         - messageUid
+        - folder
         - fromAddress
         - toAddress
         - subject
@@ -1220,6 +1456,9 @@ components:
           type: integer
         totalForwarded:
           type: integer
+        totalNotified:
+          description: Critical matches pushed to Telegram across the batch.
+          type: integer
         failed:
           description: Accounts whose scan reported a failure.
           type: integer
@@ -1233,6 +1472,7 @@ components:
         - totalMatched
         - totalArchived
         - totalForwarded
+        - totalNotified
         - failed
         - results
 
@@ -1256,6 +1496,9 @@ components:
           type: integer
         forwarded:
           type: integer
+        notified:
+          description: Critical matches pushed to Telegram for this account.
+          type: integer
         message:
           type: string
       required:
@@ -1267,6 +1510,7 @@ components:
         - matched
         - archived
         - forwarded
+        - notified
         - message
 
     DeleteAccountsBulkBody:
@@ -1301,10 +1545,132 @@ components:
         - deleted
         - notFound
 
+    DeleteMessagesBulkBody:
+      type: object
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            type: integer
+      required:
+        - ids
+
+    DeleteInboxMessagesBulkBody:
+      type: object
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            type: integer
+      required:
+        - ids
+
+    ExportMessagesBody:
+      description: >-
+        What to export: explicit `ids` (what was ticked) or, when ids are
+        omitted, every message matching the same filters the list endpoint
+        accepts (what was searched). Omitting both exports everything.
+      type: object
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            type: integer
+        accountId:
+          type: integer
+        search:
+          type: string
+        receivedFrom:
+          type: string
+        receivedTo:
+          type: string
+
+    ExportInboxMessagesBody:
+      description: Same selection policy as ExportMessagesBody, for the archive.
+      type: object
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            type: integer
+        accountId:
+          type: integer
+        provider:
+          $ref: "#/components/schemas/AccountProvider"
+        search:
+          type: string
+        receivedFrom:
+          type: string
+        receivedTo:
+          type: string
+
+    RecheckArchiveResult:
+      type: object
+      properties:
+        scanned:
+          description: Archived messages re-tested with the current keywords.
+          type: integer
+        inserted:
+          description: >-
+            Messages newly surfaced in the Messages queue. Already-matched
+            messages are left alone, so a repeated run reports only new hits.
+          type: integer
+        message:
+          type: string
+      required:
+        - scanned
+        - inserted
+        - message
+
+    DiscoverHostResult:
+      type: object
+      properties:
+        ok:
+          description: >-
+            True when a server was found and applied, or when discovery agrees
+            with the stored settings. False when nothing answered or the account
+            is not discoverable (Hostinger).
+          type: boolean
+        imapFound:
+          type: boolean
+        smtpFound:
+          type: boolean
+        updated:
+          description: >-
+            The account after the repair, or null when nothing was applied.
+            Credentials are never included.
+          allOf:
+            - $ref: "#/components/schemas/EmailAccount"
+          nullable: true
+        message:
+          description: What was found and what was applied.
+          type: string
+      required:
+        - ok
+        - imapFound
+        - smtpFound
+        - message
+
     AppSettings:
       type: object
       properties:
         keywords:
+          type: array
+          items:
+            type: string
+        criticalKeywords:
+          description: >-
+            The short list worth interrupting for: a match also pushes a
+            Telegram message with the whole email and a link to its exact web
+            view.
           type: array
           items:
             type: string
@@ -1315,6 +1681,26 @@ components:
           type: integer
         forwardingEnabled:
           type: boolean
+        telegramEnabled:
+          description: Push Telegram alerts for critical matches.
+          type: boolean
+        telegramBotTokenSet:
+          description: >-
+            True when a bot token is stored. The token itself is never
+            returned; send a new one to replace it, and note that every other
+            settings client sends `telegramBotToken` only when replacing it.
+          type: boolean
+        telegramChatId:
+          description: The chat that receives the alerts.
+          type: string
+          nullable: true
+        appUrl:
+          description: >-
+            The public address of this app, used to build the web-view links
+            inside Telegram alerts. Falls back to RENDER_EXTERNAL_URL when
+            unset.
+          type: string
+          nullable: true
         retainBodiesDays:
           description: >-
             Drop stored message bodies older than this many days, keeping the row
@@ -1327,8 +1713,11 @@ components:
           type: integer
       required:
         - keywords
+        - criticalKeywords
         - pollIntervalSeconds
         - forwardingEnabled
+        - telegramEnabled
+        - telegramBotTokenSet
         - retainBodiesDays
         - retainMessagesDays
 
@@ -1336,6 +1725,10 @@ components:
       type: object
       properties:
         keywords:
+          type: array
+          items:
+            type: string
+        criticalKeywords:
           type: array
           items:
             type: string
@@ -1347,6 +1740,19 @@ components:
           minimum: 30
         forwardingEnabled:
           type: boolean
+        telegramEnabled:
+          type: boolean
+        telegramBotToken:
+          description: >-
+            The bot token from @BotFather. Omit to keep the stored one; send
+            an empty string to remove it.
+          type: string
+        telegramChatId:
+          type: string
+          nullable: true
+        appUrl:
+          type: string
+          nullable: true
         retainBodiesDays:
           type: integer
           minimum: 0

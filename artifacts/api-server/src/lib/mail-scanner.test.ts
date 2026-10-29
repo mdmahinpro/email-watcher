@@ -86,7 +86,14 @@ interface FakeMessage {
 }
 
 const imapMock = vi.hoisted(() => {
-  const state: { messages: FakeMessage[] } = { messages: [] };
+  interface FolderState {
+    path: string;
+    messages: FakeMessage[];
+  }
+  const state: { folders: FolderState[]; current: string } = {
+    folders: [],
+    current: "INBOX",
+  };
 
   class FakeImapFlow {
     on() {
@@ -94,17 +101,30 @@ const imapMock = vi.hoisted(() => {
     }
     async connect() {}
     async logout() {}
-    async getMailboxLock() {
+    async list() {
+      return state.folders.map((f) => ({ path: f.path }));
+    }
+    async getMailboxLock(path: string) {
+      state.current = path;
       return { release: () => undefined };
     }
     async status() {
-      return { messages: state.messages.length };
+      return {
+        messages:
+          state.folders.find((f) => f.path === state.current)?.messages.length ??
+          0,
+      };
     }
     async search() {
-      return state.messages.map((m) => m.uid);
+      return (
+        state.folders.find((f) => f.path === state.current)?.messages.map(
+          (m) => m.uid,
+        ) ?? []
+      );
     }
     async *fetch() {
-      for (const m of state.messages) {
+      for (const m of state.folders.find((f) => f.path === state.current)
+        ?.messages ?? []) {
         yield {
           uid: m.uid,
           // The scanner reads the parsed message, not the envelope, when source
@@ -123,7 +143,9 @@ const imapMock = vi.hoisted(() => {
 const parserMock = vi.hoisted(() => ({
   simpleParser: vi.fn(async (buf: Buffer) => {
     const uid = Number(buf.toString().replace("raw-", ""));
-    const msg = imapMock.state.messages.find((m) => m.uid === uid)!;
+    const msg = imapMock.state.folders
+      .flatMap((f) => f.messages)
+      .find((m) => m.uid === uid)!;
     return {
       subject: msg.subject,
       text: msg.body,
@@ -137,14 +159,36 @@ const parserMock = vi.hoisted(() => ({
 }));
 
 const sendMail = vi.hoisted(() => vi.fn(async () => undefined));
-const settingsMock = vi.hoisted(() => ({
-  getSettings: vi.fn(async () => ({
-    keywords: ["invoice"] as string[],
-    forwardToEmail: "central@example.com" as string | null,
-    pollIntervalSeconds: 120,
-    forwardingEnabled: true,
-  })),
-}));
+import type { CriticalNotice } from "./telegram";
+const settingsMock = vi.hoisted(() => {
+  // Partial so a test can override just the fields its scenario needs.
+  type MockSettings = Partial<{
+    keywords: string[];
+    criticalKeywords: string[];
+    forwardToEmail: string | null;
+    pollIntervalSeconds: number;
+    forwardingEnabled: boolean;
+    telegramEnabled: boolean;
+    telegramBotToken: string | null;
+    telegramChatId: string | null;
+    appUrl: string | null;
+  }>;
+  return {
+    getSettings: vi.fn(
+      async (): Promise<MockSettings> => ({
+        keywords: ["invoice"],
+        criticalKeywords: [],
+        forwardToEmail: "central@example.com",
+        pollIntervalSeconds: 120,
+        forwardingEnabled: true,
+        telegramEnabled: false,
+        telegramBotToken: null,
+        telegramChatId: null,
+        appUrl: null,
+      }),
+    ),
+  };
+});
 
 vi.mock("@workspace/db", async () => {
   const schema = await import("@workspace/db/schema");
@@ -158,6 +202,32 @@ vi.mock("nodemailer", () => ({
   },
 }));
 vi.mock("./settings", () => settingsMock);
+
+// Telegram pushes open real network sockets; the scanner only needs to know
+// that a push was attempted and what it was asked to send.
+const telegramMock = vi.hoisted(() => ({
+  telegramActive: vi.fn(
+    (c: {
+      telegramEnabled?: boolean | undefined;
+      telegramBotToken?: string | null | undefined;
+      telegramChatId?: string | null | undefined;
+    }) =>
+      Boolean(
+        c.telegramEnabled &&
+          c.telegramBotToken &&
+          c.telegramChatId?.trim?.(),
+      ),
+  ),
+  sendCriticalNotice: vi.fn(
+    async (
+      _config: unknown,
+      _notice: unknown,
+      _viewUrl: string | null,
+    ): Promise<{ ok: boolean }> => ({ ok: true }),
+  ),
+}));
+vi.mock("./telegram", () => telegramMock);
+
 vi.mock("./logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -185,6 +255,7 @@ function account(overrides: Record<string, unknown> = {}) {
     // Non-null so the scan takes the incremental path and skips the first-scan
     // window calculation.
     lastUidSeen: 0,
+    folderMarks: null,
     lastCheckedAt: NOW,
     lastError: null,
     deletedAt: null,
@@ -196,10 +267,18 @@ function account(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   dbMock.reset();
   sendMail.mockClear();
-  imapMock.state.messages = [
-    { uid: 1, subject: "Your invoice is ready", from: "billing@x.com", body: "hi" },
-    { uid: 2, subject: "Weekly newsletter", from: "news@x.com", body: "stuff" },
-    { uid: 3, subject: "Lunch?", from: "friend@x.com", body: "free at 12" },
+  telegramMock.sendCriticalNotice.mockClear();
+  telegramMock.telegramActive.mockClear();
+  imapMock.state.current = "INBOX";
+  imapMock.state.folders = [
+    {
+      path: "INBOX",
+      messages: [
+        { uid: 1, subject: "Your invoice is ready", from: "billing@x.com", body: "hi" },
+        { uid: 2, subject: "Weekly newsletter", from: "news@x.com", body: "stuff" },
+        { uid: 3, subject: "Lunch?", from: "friend@x.com", body: "free at 12" },
+      ],
+    },
   ];
 });
 
@@ -238,8 +317,6 @@ describe("captureMode: all", () => {
 
     expect(result.scanned).toBe(3);
     expect(result.archived).toBe(3);
-    // No keyword test ran, so nothing is reported as matched.
-    expect(result.matched).toBe(0);
 
     const archived = dbMock.insertsInto("inbox_messages");
     expect(archived).toHaveLength(3);
@@ -248,11 +325,13 @@ describe("captureMode: all", () => {
       "Weekly newsletter",
       "Lunch?",
     ]);
-    // The triage queue must stay clean.
-    expect(dbMock.insertsInto("matched_messages")).toHaveLength(0);
+    // Keywords run in every capture mode: the invoice hit is surfaced in the
+    // triage queue as well as the archive.
+    expect(result.matched).toBe(1);
+    expect(dbMock.insertsInto("matched_messages")).toHaveLength(1);
   });
 
-  it("archives a message that would have matched a keyword, without matching it", async () => {
+  it("marks keyword hits in the queue without forwarding them", async () => {
     await scanAccount(account({ captureMode: "all" }));
 
     const archived = dbMock.insertsInto("inbox_messages");
@@ -263,6 +342,12 @@ describe("captureMode: all", () => {
     // Archive rows carry no keyword or forwarding columns at all.
     expect(invoiceRow).not.toHaveProperty("matchedKeywords");
     expect(invoiceRow).not.toHaveProperty("forwarded");
+
+    const matched = dbMock.insertsInto("matched_messages");
+    expect(matched).toHaveLength(1);
+    expect(matched[0]!["subject"]).toBe("Your invoice is ready");
+    expect(matched[0]!["matchedKeywords"]).toEqual(["invoice"]);
+    expect(matched[0]!["forwarded"]).toBe(false);
   });
 
   it("never forwards", async () => {
@@ -309,7 +394,7 @@ describe("captureMode: all", () => {
   });
 
   it("reports nothing to do on an idle mailbox", async () => {
-    imapMock.state.messages = [];
+    imapMock.state.folders = [{ path: "INBOX", messages: [] }];
 
     const result = await scanAccount(account({ captureMode: "all" }));
 
@@ -324,9 +409,9 @@ describe("full body storage", () => {
     // Long enough that the 320-character snippet would lose most of it — the
     // reported bug was a snippet being shown as though it were the whole email.
     const longBody = `Amount: $60.00 ${"detail ".repeat(200)}end-marker`;
-    imapMock.state.messages = [
+    imapMock.state.folders = [{ path: "INBOX", messages: [
       { uid: 1, subject: "Reward", from: "a@x.com", body: longBody },
-    ];
+    ] }];
 
     await scanAccount(account({ captureMode: "all" }));
 
@@ -338,7 +423,7 @@ describe("full body storage", () => {
   });
 
   it("stores the HTML part alongside the text part", async () => {
-    imapMock.state.messages = [
+    imapMock.state.folders = [{ path: "INBOX", messages: [
       {
         uid: 1,
         subject: "Newsletter",
@@ -346,7 +431,7 @@ describe("full body storage", () => {
         body: "plain version",
         html: "<h1>Rich</h1><p>version</p>",
       },
-    ];
+    ] }];
 
     await scanAccount(account({ captureMode: "all" }));
 
@@ -356,7 +441,7 @@ describe("full body storage", () => {
   });
 
   it("stores bodies for keyword matches too", async () => {
-    imapMock.state.messages = [
+    imapMock.state.folders = [{ path: "INBOX", messages: [
       {
         uid: 1,
         subject: "Your invoice",
@@ -364,7 +449,7 @@ describe("full body storage", () => {
         body: "full invoice text here",
         html: "<p>full invoice</p>",
       },
-    ];
+    ] }];
 
     await scanAccount(account({ captureMode: "keywords" }));
 
@@ -376,9 +461,9 @@ describe("full body storage", () => {
   it("caps an oversized text body and flags the truncation", async () => {
     // 200 KB of text against a 128 KB cap.
     const huge = "x".repeat(200 * 1024);
-    imapMock.state.messages = [
+    imapMock.state.folders = [{ path: "INBOX", messages: [
       { uid: 1, subject: "Huge", from: "a@x.com", body: huge },
-    ];
+    ] }];
 
     await scanAccount(account({ captureMode: "all" }));
 
@@ -390,9 +475,9 @@ describe("full body storage", () => {
   it("caps an oversized HTML body and flags the truncation", async () => {
     // 600 KB of HTML against a 512 KB cap — an email with inline base64 images.
     const huge = "<p>" + "y".repeat(600 * 1024);
-    imapMock.state.messages = [
+    imapMock.state.folders = [{ path: "INBOX", messages: [
       { uid: 1, subject: "Huge", from: "a@x.com", body: "short", html: huge },
-    ];
+    ] }];
 
     await scanAccount(account({ captureMode: "all" }));
 
@@ -405,9 +490,9 @@ describe("full body storage", () => {
   it("stores null rather than an empty string for a missing part", async () => {
     // An HTML-only email has no text part; null distinguishes "absent" from
     // "present but empty" for the viewer's mode switching.
-    imapMock.state.messages = [
+    imapMock.state.folders = [{ path: "INBOX", messages: [
       { uid: 1, subject: "HTML only", from: "a@x.com", body: "", html: "<p>hi</p>" },
-    ];
+    ] }];
 
     await scanAccount(account({ captureMode: "all" }));
 
@@ -421,13 +506,223 @@ describe("full body storage", () => {
     // iframe with no allow-scripts and a restrictive CSP. Stripping tags here
     // would corrupt the archive while providing weaker protection.
     const hostile = '<script>alert(1)</script><img src="http://tracker/x.gif">';
-    imapMock.state.messages = [
+    imapMock.state.folders = [{ path: "INBOX", messages: [
       { uid: 1, subject: "Hostile", from: "a@x.com", body: "t", html: hostile },
-    ];
+    ]}];
 
     await scanAccount(account({ captureMode: "all" }));
 
     const [row] = dbMock.insertsInto("inbox_messages");
     expect(row!["bodyHtml"]).toBe(hostile);
+  });
+});
+
+describe("junk folder scanning", () => {
+  it("scans the junk folder and qualifies its message uids by folder", async () => {
+    imapMock.state.folders = [
+      {
+        path: "INBOX",
+        messages: [
+          { uid: 1, subject: "Lunch?", from: "friend@x.com", body: "hi" },
+        ],
+      },
+      {
+        path: "Junk",
+        messages: [
+          {
+            uid: 7,
+            subject: "Your invoice from the promo desk",
+            from: "promo@x.com",
+            body: "open me",
+          },
+        ],
+      },
+    ];
+
+    const result = await scanAccount(account({ captureMode: "keywords" }));
+
+    expect(result.scanned).toBe(2);
+    // The invoice keyword only occurs in the junk copy, so without reading
+    // that folder this scan would have found nothing.
+    expect(result.matched).toBe(1);
+
+    const matched = dbMock.insertsInto("matched_messages");
+    expect(matched).toHaveLength(1);
+    expect(matched[0]!["folder"]).toBe("Junk");
+    // UIDs are only unique per folder, so a non-INBOX row carries the folder
+    // in its key; an INBOX row keeps the bare uid for backward compatibility.
+    expect(matched[0]!["messageUid"]).toBe("Junk:7");
+  });
+
+  it("records the folder on archived rows too", async () => {
+    imapMock.state.folders = [
+      {
+        path: "INBOX",
+        messages: [{ uid: 2, subject: "A", from: "a@x.com", body: "x" }],
+      },
+      {
+        path: "Spam",
+        messages: [{ uid: 9, subject: "B", from: "b@x.com", body: "y" }],
+      },
+    ];
+
+    await scanAccount(account({ captureMode: "all" }));
+
+    const archived = dbMock.insertsInto("inbox_messages");
+    expect(archived.map((r) => r["folder"])).toEqual(["INBOX", "Spam"]);
+  });
+
+  it("ignores ordinary folders like Sent and Trash", async () => {
+    imapMock.state.folders = [
+      { path: "INBOX", messages: [] },
+      { path: "Sent", messages: [{ uid: 5, subject: "S", from: "me@x.com", body: "sent" }] },
+      { path: "Trash", messages: [{ uid: 6, subject: "T", from: "me@x.com", body: "gone" }] },
+    ];
+
+    const result = await scanAccount(account({ captureMode: "all" }));
+
+    expect(result.scanned).toBe(0);
+    expect(result.message).toBe("No new messages.");
+  });
+});
+
+describe("keyword matching breadth", () => {
+  it("matches a keyword that appears only inside an HTML link target", async () => {
+    // The plain-text part never names the review platform; the keyword lives
+    // in the href. The old matcher, which read only the text part, missed this.
+    settingsMock.getSettings.mockResolvedValueOnce({
+      keywords: ["capterra"],
+      forwardToEmail: "central@example.com",
+      pollIntervalSeconds: 120,
+      forwardingEnabled: false,
+    });
+    imapMock.state.folders = [{ path: "INBOX", messages: [
+      {
+        uid: 1,
+        subject: "Weekly digest",
+        from: "news@x.com",
+        body: "plain part with no keyword at all",
+        html: '<p>See <a href="https://www.capterra.com/reviews/123">the page</a></p>',
+      },
+    ]}];
+
+    const result = await scanAccount(account({ captureMode: "keywords" }));
+
+    expect(result.matched).toBe(1);
+    const [row] = dbMock.insertsInto("matched_messages");
+    expect(row!["matchedKeywords"]).toEqual(["capterra"]);
+  });
+
+  it("matches a keyword encoded as an HTML entity in the HTML part", async () => {
+    settingsMock.getSettings.mockResolvedValueOnce({
+      keywords: ["$"],
+      forwardToEmail: "central@example.com",
+      pollIntervalSeconds: 120,
+      forwardingEnabled: false,
+    });
+    imapMock.state.folders = [{ path: "INBOX", messages: [
+      {
+        uid: 1,
+        subject: "Your reward",
+        from: "news@x.com",
+        body: "",
+        html: "<p>Get your &#36;50 gift card</p>",
+      },
+    ]}];
+
+    const result = await scanAccount(account({ captureMode: "keywords" }));
+
+    expect(result.matched).toBe(1);
+  });
+});
+
+describe("critical keywords and Telegram", () => {
+  const telegramSettings = {
+    keywords: ["invoice"],
+    criticalKeywords: ["urgent"],
+    telegramEnabled: true,
+    telegramBotToken: "token",
+    telegramChatId: "42",
+    appUrl: "https://watcher.example.com",
+    forwardToEmail: "central@example.com",
+    pollIntervalSeconds: 120,
+    forwardingEnabled: false,
+  };
+
+  it("pushes one Telegram notice for a critical hit", async () => {
+    settingsMock.getSettings.mockResolvedValueOnce(telegramSettings);
+    imapMock.state.folders = [{ path: "INBOX", messages: [
+      {
+        uid: 1,
+        subject: "Urgent invoice needed",
+        from: "billing@x.com",
+        body: "the urgent invoice text",
+      },
+    ]}];
+
+    const result = await scanAccount(account({ captureMode: "keywords" }));
+
+    // A critical hit is also a regular match: listed like any keyword.
+    expect(result.matched).toBe(1);
+    expect(result.notified).toBe(1);
+    expect(result.message).toContain("Notified 1 via Telegram.");
+
+    expect(telegramMock.sendCriticalNotice).toHaveBeenCalledTimes(1);
+    const [call] = telegramMock.sendCriticalNotice.mock.calls;
+    const notice = call?.[1] as CriticalNotice;
+    const viewUrl = call?.[2] as string | null;
+    expect(notice.criticalHits).toEqual(["urgent"]);
+    expect(notice.subject).toBe("Urgent invoice needed");
+    expect(notice.accountLabel).toBe("Mailbox");
+    // The button links to a signed, unguessable path for exactly this row.
+    expect(viewUrl).toMatch(/^https:\/\/watcher\.example\.com\/view\/v1\.matched\.1\./);
+  });
+
+  it("lists a critical match from an `all` mailbox without forwarding it", async () => {
+    settingsMock.getSettings.mockResolvedValueOnce(telegramSettings);
+    imapMock.state.folders = [{ path: "INBOX", messages: [
+      { uid: 1, subject: "Urgent reward claim", from: "promo@x.com", body: "go" },
+      { uid: 2, subject: "Newsletter", from: "news@x.com", body: "weekly" },
+    ]}];
+
+    const result = await scanAccount(account({ captureMode: "all" }));
+
+    // Archived everything, listed the one critical hit, pushed it, forwarded
+    // nothing — the loop-prevention rule stands even for critical mail.
+    expect(result.archived).toBe(2);
+    expect(result.matched).toBe(1);
+    expect(result.notified).toBe(1);
+    expect(result.forwarded).toBe(0);
+    expect(sendMail).not.toHaveBeenCalled();
+  });
+
+  it("does not push when only a regular keyword hits", async () => {
+    settingsMock.getSettings.mockResolvedValueOnce(telegramSettings);
+    imapMock.state.folders = [{ path: "INBOX", messages: [
+      { uid: 1, subject: "Your invoice", from: "billing@x.com", body: "plain" },
+    ]}];
+
+    const result = await scanAccount(account({ captureMode: "keywords" }));
+
+    expect(result.matched).toBe(1);
+    expect(result.notified).toBe(0);
+    expect(telegramMock.sendCriticalNotice).not.toHaveBeenCalled();
+  });
+
+  it("stays quiet when Telegram is not configured", async () => {
+    settingsMock.getSettings.mockResolvedValueOnce({
+      ...telegramSettings,
+      telegramEnabled: false,
+    });
+    imapMock.state.folders = [{ path: "INBOX", messages: [
+      { uid: 1, subject: "Urgent invoice", from: "billing@x.com", body: "urgent" },
+    ]}];
+
+    const result = await scanAccount(account({ captureMode: "keywords" }));
+
+    // The match is still stored and listed — only the push is suppressed.
+    expect(result.matched).toBe(1);
+    expect(result.notified).toBe(0);
+    expect(telegramMock.sendCriticalNotice).not.toHaveBeenCalled();
   });
 });

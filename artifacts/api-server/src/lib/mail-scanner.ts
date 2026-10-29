@@ -13,8 +13,19 @@ import {
 import { getSettings } from "./settings";
 import { logger } from "./logger";
 import {
+  sendCriticalNotice,
+  telegramActive,
+  type CriticalNotice,
+  type TelegramConfig,
+} from "./telegram";
+import { createViewToken } from "./auth";
+import { authState } from "../routes/auth";
+import {
+  buildKeywordHaystack,
   capBody,
   findKeywordMatches,
+  INITIAL_SCAN_LIMIT,
+  isJunkFolder,
   makeSnippet,
   mapWithConcurrency,
   resolveScanTargets,
@@ -135,8 +146,20 @@ export function describeConnectionError(err: unknown): string {
   if (code === "ENOTFOUND" || /ENOTFOUND|getaddrinfo/i.test(message)) {
     return (
       `${message} — that hostname does not exist in DNS. This domain does not ` +
-      "use mail.<domain>; find the real mail server (often the domain itself, " +
-      "or check the MX record) and set it on this account."
+      "use mail.<domain>. Use the Auto-fix server button on the account card " +
+      "to look up the real mail server from the domain's MX record, or set it " +
+      "by hand."
+    );
+  }
+
+  // The host resolved but nothing answered on that port: wrong host, wrong
+  // port, or a provider that blocks IMAP from outside its own network.
+  if (code === "ECONNREFUSED" || /econnrefused/i.test(message)) {
+    return (
+      `${message} — the server refused the connection on this port. The mail ` +
+      "server may be on a different hostname or port than configured. Use the " +
+      "Auto-fix server button on the account card to probe the domain's real " +
+      "IMAP and SMTP endpoints, or check the port (993 SSL, 143 STARTTLS)."
     );
   }
 
@@ -168,8 +191,10 @@ export function describeConnectionError(err: unknown): string {
 
   if (code === "ETIMEDOUT" || /timeout|required time/i.test(message)) {
     return (
-      `${message} — the server did not answer in time. Check the host and port, ` +
-      "and whether the provider blocks IMAP from outside its own network."
+      `${message} — the server did not answer in time. Check the host and ` +
+      "port. Use the Auto-fix server button on the account card to probe for " +
+      "the domain's real mail server, and consider that the provider may " +
+      "block IMAP from outside its own network."
     );
   }
 
@@ -234,17 +259,70 @@ export interface ScanOutcome {
   matched: number;
   archived: number;
   forwarded: number;
+  /** Critical matches successfully pushed to Telegram this scan. */
+  notified: number;
   message: string;
+}
+
+/**
+ * The slice of an ImapFlow client the folder listing needs.
+ */
+interface MailboxLister {
+  list(): Promise<
+    Array<{ path: string; specialUse?: string | undefined }> | undefined
+  >;
+}
+
+/**
+ * Folders one scan reads: INBOX plus every junk/spam folder the server offers.
+ *
+ * The mail this app exists to catch — review invitations, rewards, "claim your
+ * gift" — is exactly the mail spam filters move out of the inbox, so not
+ * reading the junk folder is the biggest way a keyword match gets lost. A
+ * folder is recognized by its name (small providers use "Junk", "Spam",
+ * "Bulk Mail", ...) or by the IMAP special-use flag when the server sets one.
+ * Folders that do not exist are simply absent from the listing, and a server
+ * whose LIST fails falls back to INBOX only.
+ */
+export async function foldersToScan(client: MailboxLister): Promise<string[]> {
+  let mailboxes: Array<{ path: string; specialUse?: string | undefined }> = [];
+  try {
+    mailboxes = (await client.list()) ?? [];
+  } catch (err) {
+    logger.warn({ err }, "Could not list mailboxes; scanning INBOX only");
+    return ["INBOX"];
+  }
+
+  const folders = ["INBOX"];
+  for (const mb of mailboxes) {
+    if (mb.path === "INBOX") continue;
+    if (isJunkFolder(mb.path) || mb.specialUse === "\\Junk") {
+      folders.push(mb.path);
+    }
+  }
+  return folders;
 }
 
 /** Advance the stored high-water mark and clear any previous failure. */
 async function commitProgress(
   accountId: number,
+  folder: string,
   lastUidSeen: number,
 ): Promise<void> {
   await db
     .update(emailAccountsTable)
-    .set({ lastUidSeen, lastCheckedAt: new Date(), lastError: null })
+    .set({
+      // Merge the one folder's mark into the map without clobbering the
+      // others: concurrent progress commits touch different folders of the
+      // same account.
+      folderMarks: sql`coalesce(${emailAccountsTable.folderMarks}, '{}'::jsonb) || ${JSON.stringify({ [folder]: lastUidSeen })}::jsonb`,
+      // lastUidSeen stays the INBOX mark for backward compatibility: the
+      // account card predates per-folder marks and pre-existing deployments
+      // have no folder_marks value at all.
+      ...(folder === "INBOX" ? { lastUidSeen } : {}),
+      lastCheckedAt: new Date(),
+      lastError: null,
+    })
     .where(eq(emailAccountsTable.id, accountId));
 }
 
@@ -366,9 +444,70 @@ export async function scanAccount(
   return run;
 }
 
+/**
+ * A stored match that still needs a Telegram push. Sent after the IMAP
+ * connection is released, so a slow Telegram API cannot hold the mailbox open.
+ */
+interface PendingNotice extends CriticalNotice {
+  rowId: number;
+}
+
+/**
+ * Push every critical match, and report how many went through.
+ *
+ * Failures are logged per message and never abort the batch — the match is
+ * already stored and listed, so a Telegram outage costs the push, not the mail.
+ * The "open in Email Watcher" link is a signed, expiring token for exactly
+ * this message, so the reader needs no session.
+ */
+async function sendPendingNotices(
+  config: TelegramConfig,
+  pending: PendingNotice[],
+  appUrl: string | null,
+): Promise<number> {
+  if (pending.length === 0) return 0;
+
+  const base = (
+    appUrl?.trim() ||
+    process.env["RENDER_EXTERNAL_URL"]?.trim() ||
+    ""
+  ).replace(/\/+$/, "");
+
+  let notified = 0;
+  for (const notice of pending) {
+    const viewUrl =
+      base && authState.enabled
+        ? `${base}/view/${createViewToken(
+            authState.config.sessionSecret,
+            authState.config.passwordHash,
+            "matched",
+            notice.rowId,
+          )}`
+        : null;
+
+    const result = await sendCriticalNotice(config, notice, viewUrl);
+    if (result.ok) {
+      notified++;
+    } else {
+      logger.error(
+        { err: result.error, messageId: notice.rowId },
+        "Failed to send Telegram critical notice",
+      );
+    }
+  }
+  return notified;
+}
+
 async function runScan(account: EmailAccount): Promise<ScanOutcome> {
   const settings = await getSettings();
   const keywords = settings.keywords ?? [];
+  const criticalKeywords = settings.criticalKeywords ?? [];
+  const telegramConfig: TelegramConfig = {
+    telegramEnabled: settings.telegramEnabled,
+    telegramBotToken: settings.telegramBotToken,
+    telegramChatId: settings.telegramChatId,
+  };
+  const telegramPush = telegramActive(telegramConfig);
   const forwardTo = settings.forwardToEmail?.trim() ?? "";
 
   // An `all` mailbox archives everything and forwards nothing: relaying every
@@ -378,218 +517,280 @@ async function runScan(account: EmailAccount): Promise<ScanOutcome> {
   const forwardingActive =
     !archiveEverything && settings.forwardingEnabled && forwardTo.length > 0;
 
+  // Keywords run in every capture mode — critical ones are additionally
+  // pushed to Telegram when it is configured.
+  const runKeywords = keywords.length > 0 || criticalKeywords.length > 0;
+
   const client = createImapClient(account);
 
   let scanned = 0;
   let matched = 0;
   let archived = 0;
   const pending: PendingForward[] = [];
+  const pendingNotices: PendingNotice[] = [];
+
+  // Seed the per-folder marks. A deployment predating per-folder marks has
+  // only lastUidSeen, which has always been the INBOX mark.
+  const marks: Record<string, number> = { ...(account.folderMarks ?? {}) };
+  if (account.lastUidSeen !== null && marks["INBOX"] === undefined) {
+    marks["INBOX"] = account.lastUidSeen;
+  }
 
   try {
     await client.connect();
-    const lock = await client.getMailboxLock("INBOX");
-    try {
-      const target = await resolveScanTargets(client, account.lastUidSeen);
-      if (!target) {
-        await commitProgress(account.id, account.lastUidSeen ?? 0);
-        return {
-          scanned: 0,
-          matched: 0,
-          archived: 0,
-          forwarded: 0,
-          message: "No new messages.",
-        };
-      }
+    const folders = await foldersToScan(client);
 
-      let highestUid = target.baseline;
-
-      for await (const msg of client.fetch(
-        target.uids,
-        {
-          uid: true,
-          envelope: true,
-          source: true,
-          internalDate: true,
-        },
-        { uid: true },
-      )) {
-        scanned++;
-        const uid = msg.uid;
-
-        const sourceBuf = msg.source as Buffer | undefined;
-        if (!sourceBuf) {
-          // Leave the high-water mark behind this message so a later scan can
-          // retry it instead of skipping it permanently.
-          logger.warn(
-            { accountId: account.id, uid },
-            "Message had no source; will retry on next scan",
-          );
-          break;
+    for (const folder of folders) {
+      const lock = await client.getMailboxLock(folder);
+      try {
+        const mark = marks[folder] ?? null;
+        const target = await resolveScanTargets(
+          client,
+          mark,
+          INITIAL_SCAN_LIMIT,
+          folder,
+        );
+        if (!target) {
+          // Nothing new in this folder; still stamp the check time and clear
+          // any previous failure, exactly like the original single-folder scan.
+          await commitProgress(account.id, folder, mark ?? 0);
+          continue;
         }
 
-        const parsed = await simpleParser(sourceBuf);
-        const subject = parsed.subject ?? "(no subject)";
-        const text = parsed.text ?? "";
-        const html = parsed.html ? parsed.html.toString() : "";
-        const plainBody = text || html.replace(/<[^>]*>/g, " ");
-        const fromAddress =
-          parsed.from?.text ?? msg.envelope?.from?.[0]?.address ?? "";
-        const toAddressRaw = parsed.to;
-        const toAddress = Array.isArray(toAddressRaw)
-          ? toAddressRaw.map((a) => a.text).join(", ")
-          : (toAddressRaw?.text ??
-            msg.envelope?.to?.[0]?.address ??
-            account.emailAddress);
+        let highestUid = target.baseline;
 
-        const rawDate = parsed.date ?? msg.internalDate ?? new Date();
-        const receivedAt =
-          rawDate instanceof Date ? rawDate : new Date(rawDate);
-        const snippet = makeSnippet(plainBody);
+        for await (const msg of client.fetch(
+          target.uids,
+          {
+            uid: true,
+            envelope: true,
+            source: true,
+            internalDate: true,
+          },
+          { uid: true },
+        )) {
+          scanned++;
+          const uid = msg.uid;
 
-        // Store the full bodies, capped. An email with inline base64 images can
-        // be megabytes, and an `all`-capture mailbox archives every one of them,
-        // so an uncapped column would fill a free-tier database quickly.
-        const storedText = capBody(text, BODY_LIMITS.text);
-        const storedHtml = capBody(html, BODY_LIMITS.html);
-
-        // Shared columns for whichever table this message lands in.
-        const common = {
-          accountId: account.id,
-          // The snapshot is written once and never updated, so renaming,
-          // re-pointing, or removing the account cannot rewrite where this
-          // message came from.
-          accountLabelSnapshot: account.label.slice(0, 500),
-          accountEmailSnapshot: account.emailAddress.slice(0, 500),
-          messageUid: String(uid),
-          messageId: parsed.messageId ?? null,
-          fromAddress: fromAddress.slice(0, 500),
-          toAddress: String(toAddress).slice(0, 500),
-          subject: subject.slice(0, 1000),
-          snippet,
-          bodyText: storedText.value || null,
-          bodyHtml: storedHtml.value || null,
-          bodyTruncated: storedText.truncated || storedHtml.truncated,
-          receivedAt,
-        };
-
-        if (archiveEverything) {
-          try {
-            await db
-              .insert(inboxMessagesTable)
-              .values(common)
-              // A rescan re-reads messages that are already stored (for example
-              // after the UID mark is reset). Rather than skipping them
-              // outright, backfill the body columns when they are still null —
-              // that is how rows captured before bodies were recorded acquire
-              // one. COALESCE means an existing body is never overwritten, so a
-              // rescan cannot rewrite history.
-              .onConflictDoUpdate({
-                target: [
-                  inboxMessagesTable.accountId,
-                  inboxMessagesTable.messageUid,
-                ],
-                set: {
-                  bodyText: sql`coalesce(${inboxMessagesTable.bodyText}, excluded.body_text)`,
-                  bodyHtml: sql`coalesce(${inboxMessagesTable.bodyHtml}, excluded.body_html)`,
-                  bodyTruncated: sql`${inboxMessagesTable.bodyTruncated} or excluded.body_truncated`,
-                },
-              });
-            archived++;
-          } catch (err) {
-            logger.error(
-              { err, accountId: account.id, uid },
-              "Failed to archive message",
+          const sourceBuf = msg.source as Buffer | undefined;
+          if (!sourceBuf) {
+            // Leave the high-water mark behind this message so a later scan can
+            // retry it instead of skipping it permanently.
+            logger.warn(
+              { accountId: account.id, uid, folder },
+              "Message had no source; will retry on next scan",
             );
-            // Not persisted, so do not advance past it.
             break;
           }
 
-          if (uid > highestUid) highestUid = uid;
-          await commitProgress(account.id, highestUid);
-          continue;
-        }
+          const parsed = await simpleParser(sourceBuf);
+          const subject = parsed.subject ?? "(no subject)";
+          const text = parsed.text ?? "";
+          const html = parsed.html ? parsed.html.toString() : "";
+          const plainBody = text || html.replace(/<[^>]*>/g, " ");
+          const fromAddress =
+            parsed.from?.text ?? msg.envelope?.from?.[0]?.address ?? "";
+          const toAddressRaw = parsed.to;
+          const toAddress = Array.isArray(toAddressRaw)
+            ? toAddressRaw.map((a) => a.text).join(", ")
+            : (toAddressRaw?.text ??
+              msg.envelope?.to?.[0]?.address ??
+              account.emailAddress);
 
-        const haystack = `${subject}\n${fromAddress}\n${plainBody}`;
-        const hits = findKeywordMatches(haystack, keywords);
-        if (hits.length === 0) {
-          if (uid > highestUid) highestUid = uid;
-          continue;
-        }
+          const rawDate = parsed.date ?? msg.internalDate ?? new Date();
+          const receivedAt =
+            rawDate instanceof Date ? rawDate : new Date(rawDate);
+          const snippet = makeSnippet(plainBody);
 
-        matched++;
+          // Store the full bodies, capped. An email with inline base64 images can
+          // be megabytes, and an `all`-capture mailbox archives every one of them,
+          // so an uncapped column would fill a free-tier database quickly.
+          const storedText = capBody(text, BODY_LIMITS.text);
+          const storedHtml = capBody(html, BODY_LIMITS.html);
 
-        let insertedId: number | undefined;
-        try {
-          // Forwarding is deferred, so the row starts as not-yet-forwarded.
-          //
-          // onConflictDoNothing (not DoUpdate) is deliberate: an absent returned
-          // id is exactly the signal that this message was already stored by an
-          // earlier scan and must not be forwarded again.
-          const inserted = await db
-            .insert(matchedMessagesTable)
-            .values({
-              ...common,
-              matchedKeywords: hits,
-              forwarded: false,
-              forwardError: null,
-            })
-            .onConflictDoNothing()
-            .returning({ id: matchedMessagesTable.id });
-          insertedId = inserted[0]?.id;
+          // UIDs are only unique within one folder, so a message read outside
+          // INBOX carries the folder in its key. INBOX keys stay bare so rows
+          // written before folders existed keep deduplicating.
+          const messageUid =
+            folder === "INBOX" ? String(uid) : `${folder}:${uid}`;
 
-          if (insertedId === undefined) {
-            // Already stored. Backfill the body columns if they are still null,
-            // which is how rows captured before bodies were recorded acquire
-            // one. COALESCE never overwrites an existing body, and the
-            // forwarding columns are untouched so nothing is re-sent.
-            await db
-              .update(matchedMessagesTable)
-              .set({
-                bodyText: sql`coalesce(${matchedMessagesTable.bodyText}, ${common.bodyText})`,
-                bodyHtml: sql`coalesce(${matchedMessagesTable.bodyHtml}, ${common.bodyHtml})`,
-                bodyTruncated: sql`${matchedMessagesTable.bodyTruncated} or ${common.bodyTruncated}`,
-              })
-              .where(
-                and(
-                  eq(matchedMessagesTable.accountId, account.id),
-                  eq(matchedMessagesTable.messageUid, String(uid)),
-                ),
-              );
-          }
-        } catch (err) {
-          logger.error(
-            { err, accountId: account.id, uid },
-            "Failed to insert matched message",
-          );
-          // The match is not persisted, so do not advance past it.
-          break;
-        }
-
-        // No id means the row already existed, so it was handled by a previous
-        // scan and must not be forwarded again.
-        if (forwardingActive && insertedId !== undefined) {
-          pending.push({
-            rowId: insertedId,
-            uid,
-            subject,
-            fromAddress,
-            toAddress: String(toAddress),
+          // Shared columns for whichever table this message lands in.
+          const common = {
+            accountId: account.id,
+            // The snapshot is written once and never updated, so renaming,
+            // re-pointing, or removing the account cannot rewrite where this
+            // message came from.
+            accountLabelSnapshot: account.label.slice(0, 500),
+            accountEmailSnapshot: account.emailAddress.slice(0, 500),
+            messageUid,
+            folder,
+            messageId: parsed.messageId ?? null,
+            fromAddress: fromAddress.slice(0, 500),
+            toAddress: String(toAddress).slice(0, 500),
+            subject: subject.slice(0, 1000),
+            snippet,
+            bodyText: storedText.value || null,
+            bodyHtml: storedHtml.value || null,
+            bodyTruncated: storedText.truncated || storedHtml.truncated,
             receivedAt,
-            text,
-            html,
-            hits,
-          });
+          };
+
+          const haystack = runKeywords
+            ? buildKeywordHaystack({
+                subject,
+                from: fromAddress,
+                to: String(toAddress),
+                text,
+                html,
+              })
+            : "";
+          const regularHits =
+            keywords.length > 0
+              ? findKeywordMatches(haystack, keywords)
+              : [];
+          const criticalHits =
+            criticalKeywords.length > 0
+              ? findKeywordMatches(haystack, criticalKeywords)
+              : [];
+          // A critical keyword is also a keyword: its match is listed like any
+          // other, deduplicated in its configured spelling.
+          const hits = [...regularHits];
+          for (const hit of criticalHits) {
+            if (!hits.includes(hit)) hits.push(hit);
+          }
+
+          if (archiveEverything) {
+            try {
+              await db
+                .insert(inboxMessagesTable)
+                .values(common)
+                // A rescan re-reads messages that are already stored (for example
+                // after the UID mark is reset). Rather than skipping them
+                // outright, backfill the body columns when they are still null —
+                // that is how rows captured before bodies were recorded acquire
+                // one. COALESCE means an existing body is never overwritten, so a
+                // rescan cannot rewrite history.
+                .onConflictDoUpdate({
+                  target: [
+                    inboxMessagesTable.accountId,
+                    inboxMessagesTable.messageUid,
+                  ],
+                  set: {
+                    bodyText: sql`coalesce(${inboxMessagesTable.bodyText}, excluded.body_text)`,
+                    bodyHtml: sql`coalesce(${inboxMessagesTable.bodyHtml}, excluded.body_html)`,
+                    bodyTruncated: sql`${inboxMessagesTable.bodyTruncated} or excluded.body_truncated`,
+                  },
+                });
+              archived++;
+            } catch (err) {
+              logger.error(
+                { err, accountId: account.id, uid, folder },
+                "Failed to archive message",
+              );
+              // Not persisted, so do not advance past it.
+              break;
+            }
+          }
+
+          if (hits.length > 0) {
+            matched++;
+            let insertedId: number | undefined;
+            try {
+              // Forwarding is deferred, so the row starts as not-yet-forwarded.
+              //
+              // onConflictDoNothing (not DoUpdate) is deliberate: an absent returned
+              // id is exactly the signal that this message was already stored by an
+              // earlier scan and must not be forwarded again.
+              const inserted = await db
+                .insert(matchedMessagesTable)
+                .values({
+                  ...common,
+                  matchedKeywords: hits,
+                  forwarded: false,
+                  forwardError: null,
+                })
+                .onConflictDoNothing()
+                .returning({ id: matchedMessagesTable.id });
+              insertedId = inserted[0]?.id;
+
+              if (insertedId === undefined) {
+                // Already stored. Backfill the body columns if they are still null,
+                // which is how rows captured before bodies were recorded acquire
+                // one. COALESCE never overwrites an existing body, and the
+                // forwarding columns are untouched so nothing is re-sent.
+                await db
+                  .update(matchedMessagesTable)
+                  .set({
+                    bodyText: sql`coalesce(${matchedMessagesTable.bodyText}, ${common.bodyText})`,
+                    bodyHtml: sql`coalesce(${matchedMessagesTable.bodyHtml}, ${common.bodyHtml})`,
+                    bodyTruncated: sql`${matchedMessagesTable.bodyTruncated} or ${common.bodyTruncated}`,
+                  })
+                  .where(
+                    and(
+                      eq(matchedMessagesTable.accountId, account.id),
+                      eq(matchedMessagesTable.messageUid, messageUid),
+                    ),
+                  );
+              }
+            } catch (err) {
+              logger.error(
+                { err, accountId: account.id, uid, folder },
+                "Failed to insert matched message",
+              );
+              // The match is not persisted, so do not advance past it.
+              break;
+            }
+
+            // No id means the row already existed, so it was handled by a previous
+            // scan and must not be forwarded again. An `all` mailbox never
+            // forwards: relaying every arriving email invites a mail loop.
+            if (forwardingActive && insertedId !== undefined) {
+              pending.push({
+                rowId: insertedId,
+                uid,
+                subject,
+                fromAddress,
+                toAddress: String(toAddress),
+                receivedAt,
+                text,
+                html,
+                hits,
+              });
+            }
+
+            // Same rule for the Telegram push: only a newly stored row
+            // notifies, so a rescan cannot spam the same match twice.
+            if (
+              telegramPush &&
+              criticalHits.length > 0 &&
+              insertedId !== undefined
+            ) {
+              pendingNotices.push({
+                rowId: insertedId,
+                subject,
+                fromAddress,
+                toAddress: String(toAddress),
+                accountLabel: account.label,
+                accountEmail: account.emailAddress,
+                folder,
+                receivedAt,
+                criticalHits,
+                bodyText: text,
+                bodyHtml: html,
+              });
+            }
+          }
+
+          if (uid > highestUid) highestUid = uid;
+          // Commit incrementally: a crash mid-loop must not replay messages that
+          // were already stored.
+          await commitProgress(account.id, folder, highestUid);
         }
 
-        if (uid > highestUid) highestUid = uid;
-        // Commit incrementally: a crash mid-loop must not replay messages that
-        // were already stored.
-        await commitProgress(account.id, highestUid);
+        await commitProgress(account.id, folder, highestUid);
+      } finally {
+        lock.release();
       }
-
-      await commitProgress(account.id, highestUid);
-    } finally {
-      lock.release();
     }
   } catch (err: unknown) {
     // Stored on the account and shown on its card, so it must name the remedy
@@ -605,6 +806,7 @@ async function runScan(account: EmailAccount): Promise<ScanOutcome> {
       matched,
       archived,
       forwarded: 0,
+      notified: 0,
       message: `Scan failed: ${msg}`,
     };
   } finally {
@@ -615,17 +817,38 @@ async function runScan(account: EmailAccount): Promise<ScanOutcome> {
     }
   }
 
+  if (scanned === 0) {
+    return {
+      scanned: 0,
+      matched: 0,
+      archived: 0,
+      forwarded: 0,
+      notified: 0,
+      message: "No new messages.",
+    };
+  }
+
   // IMAP is released at this point, so slow SMTP cannot stall the mailbox.
   const forwarded = await forwardPending(account, pending, forwardTo);
+  const notified = telegramPush
+    ? await sendPendingNotices(
+        telegramConfig,
+        pendingNotices,
+        settings.appUrl,
+      )
+    : 0;
 
+  const notifiedSuffix =
+    notified > 0 ? ` Notified ${notified} via Telegram.` : "";
   return {
     scanned,
     matched,
     archived,
     forwarded,
+    notified,
     message: archiveEverything
-      ? `Scanned ${scanned}, archived ${archived}.`
-      : `Scanned ${scanned}, matched ${matched}, forwarded ${forwarded}.`,
+      ? `Scanned ${scanned}, archived ${archived}.${notifiedSuffix}`
+      : `Scanned ${scanned}, matched ${matched}, forwarded ${forwarded}.${notifiedSuffix}`,
   };
 }
 

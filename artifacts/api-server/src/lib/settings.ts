@@ -28,9 +28,14 @@ export async function getSettings(): Promise<AppSettings> {
     .insert(appSettingsTable)
     .values({
       keywords: DEFAULT_KEYWORDS,
+      criticalKeywords: [],
       forwardToEmail: null,
       pollIntervalSeconds: 120,
       forwardingEnabled: true,
+      telegramEnabled: false,
+      telegramBotToken: null,
+      telegramChatId: null,
+      appUrl: null,
     })
     .returning();
   return created!;
@@ -39,9 +44,14 @@ export async function getSettings(): Promise<AppSettings> {
 export async function updateSettings(
   patch: Partial<{
     keywords: string[];
+    criticalKeywords: string[];
     forwardToEmail: string | null;
     pollIntervalSeconds: number;
     forwardingEnabled: boolean;
+    telegramEnabled: boolean;
+    telegramBotToken: string | null;
+    telegramChatId: string | null;
+    appUrl: string | null;
     retainBodiesDays: number;
     retainMessagesDays: number;
   }>,
@@ -51,6 +61,7 @@ export async function updateSettings(
     .update(appSettingsTable)
     .set({
       keywords: patch.keywords ?? current.keywords,
+      criticalKeywords: patch.criticalKeywords ?? current.criticalKeywords,
       forwardToEmail:
         patch.forwardToEmail !== undefined
           ? patch.forwardToEmail
@@ -61,6 +72,21 @@ export async function updateSettings(
         patch.forwardingEnabled !== undefined
           ? patch.forwardingEnabled
           : current.forwardingEnabled,
+      telegramEnabled:
+        patch.telegramEnabled !== undefined
+          ? patch.telegramEnabled
+          : current.telegramEnabled,
+      // The bot token is a secret: an omitted value keeps the stored one, and
+      // an empty string clears it. It is never echoed back by the API.
+      telegramBotToken:
+        patch.telegramBotToken !== undefined
+          ? patch.telegramBotToken
+          : current.telegramBotToken,
+      telegramChatId:
+        patch.telegramChatId !== undefined
+          ? patch.telegramChatId
+          : current.telegramChatId,
+      appUrl: patch.appUrl !== undefined ? patch.appUrl : current.appUrl,
       retainBodiesDays:
         patch.retainBodiesDays ?? current.retainBodiesDays,
       retainMessagesDays:

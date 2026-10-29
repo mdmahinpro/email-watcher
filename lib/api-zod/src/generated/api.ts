@@ -66,7 +66,7 @@ export const ListAccountsResponseItem = zod.object({
   captureMode: zod
     .enum(["keywords", "all"])
     .describe(
-      "What a scan stores. `keywords` stores only keyword matches into \/messages and forwards them. `all` archives every arriving message into \/inbox with no keyword test and no forwarding.",
+      "What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into \/messages and forwards them. `all` also archives every arriving message into \/inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in \/messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.",
     ),
   imapHost: zod.string(),
   imapPort: zod.number(),
@@ -123,10 +123,6 @@ export const CreateAccountBody = zod.object({
 
 export const createAccountsBulkBodyAccountsMax = 200;
 
-export const createAccountsBulkBodyImapPortDefault = 993;
-export const createAccountsBulkBodyImapSecureDefault = true;
-export const createAccountsBulkBodySmtpPortDefault = 465;
-export const createAccountsBulkBodySmtpSecureDefault = true;
 export const createAccountsBulkBodyAllowInvalidCertDefault = false;
 
 export const CreateAccountsBulkBody = zod
@@ -158,19 +154,24 @@ export const CreateAccountsBulkBody = zod
       .min(1)
       .optional()
       .describe(
-        "Applies to every mailbox in the batch. Omit to derive `mail.<domain>` from each address individually.",
+        "Applies to every mailbox in the batch. Omit to look up each domain's real mail server automatically (MX records and a live probe), falling back to `mail.<domain>`.",
       ),
-    imapPort: zod.number().default(createAccountsBulkBodyImapPortDefault),
-    imapSecure: zod.boolean().default(createAccountsBulkBodyImapSecureDefault),
+    imapPort: zod
+      .number()
+      .optional()
+      .describe(
+        "Omit along with `imapHost` to take the port a discovered server actually answered on; the conventional default is 993.",
+      ),
+    imapSecure: zod.boolean().optional(),
     smtpHost: zod
       .string()
       .min(1)
       .optional()
       .describe(
-        "Applies to every mailbox in the batch. Omit to derive `mail.<domain>` from each address individually.",
+        "Applies to every mailbox in the batch. Omit to look up each domain's real mail server automatically, falling back to `mail.<domain>`.",
       ),
-    smtpPort: zod.number().default(createAccountsBulkBodySmtpPortDefault),
-    smtpSecure: zod.boolean().default(createAccountsBulkBodySmtpSecureDefault),
+    smtpPort: zod.number().optional(),
+    smtpSecure: zod.boolean().optional(),
     allowInvalidCert: zod
       .boolean()
       .default(createAccountsBulkBodyAllowInvalidCertDefault)
@@ -196,7 +197,7 @@ export const CreateAccountsBulkResponse = zod.object({
       captureMode: zod
         .enum(["keywords", "all"])
         .describe(
-          "What a scan stores. `keywords` stores only keyword matches into \/messages and forwards them. `all` archives every arriving message into \/inbox with no keyword test and no forwarding.",
+          "What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into \/messages and forwards them. `all` also archives every arriving message into \/inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in \/messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.",
         ),
       imapHost: zod.string(),
       imapPort: zod.number(),
@@ -267,7 +268,7 @@ export const CreateHostingerAccountsBody = zod
     captureMode: zod
       .enum(["keywords", "all"])
       .describe(
-        "What a scan stores. `keywords` stores only keyword matches into \/messages and forwards them. `all` archives every arriving message into \/inbox with no keyword test and no forwarding.",
+        "What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into \/messages and forwards them. `all` also archives every arriving message into \/inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in \/messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.",
       )
       .default(createHostingerAccountsBodyCaptureModeDefault)
       .describe(
@@ -298,7 +299,7 @@ export const CreateHostingerAccountsResponse = zod.object({
       captureMode: zod
         .enum(["keywords", "all"])
         .describe(
-          "What a scan stores. `keywords` stores only keyword matches into \/messages and forwards them. `all` archives every arriving message into \/inbox with no keyword test and no forwarding.",
+          "What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into \/messages and forwards them. `all` also archives every arriving message into \/inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in \/messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.",
         ),
       imapHost: zod.string(),
       imapPort: zod.number(),
@@ -386,6 +387,9 @@ export const ScanAllAccountsResponse = zod.object({
   totalMatched: zod.number(),
   totalArchived: zod.number(),
   totalForwarded: zod.number(),
+  totalNotified: zod
+    .number()
+    .describe("Critical matches pushed to Telegram across the batch."),
   failed: zod.number().describe("Accounts whose scan reported a failure."),
   results: zod.array(
     zod.object({
@@ -399,6 +403,9 @@ export const ScanAllAccountsResponse = zod.object({
       matched: zod.number(),
       archived: zod.number(),
       forwarded: zod.number(),
+      notified: zod
+        .number()
+        .describe("Critical matches pushed to Telegram for this account."),
       message: zod.string(),
     }),
   ),
@@ -451,7 +458,7 @@ export const UpdateAccountBody = zod
       .enum(["keywords", "all"])
       .optional()
       .describe(
-        "What a scan stores. `keywords` stores only keyword matches into \/messages and forwards them. `all` archives every arriving message into \/inbox with no keyword test and no forwarding.",
+        "What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into \/messages and forwards them. `all` also archives every arriving message into \/inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in \/messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.",
       ),
   })
   .describe(
@@ -470,7 +477,7 @@ export const UpdateAccountResponse = zod.object({
   captureMode: zod
     .enum(["keywords", "all"])
     .describe(
-      "What a scan stores. `keywords` stores only keyword matches into \/messages and forwards them. `all` archives every arriving message into \/inbox with no keyword test and no forwarding.",
+      "What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into \/messages and forwards them. `all` also archives every arriving message into \/inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in \/messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.",
     ),
   imapHost: zod.string(),
   imapPort: zod.number(),
@@ -521,11 +528,69 @@ export const ScanAccountResponse = zod.object({
   matched: zod
     .number()
     .describe(
-      "Keyword matches stored, for a `keywords` mailbox. Always 0 for an `all` mailbox, which archives instead of matching.",
+      "Keyword matches stored, in either capture mode. Forwarded ones came from a `keywords` mailbox.",
     ),
   archived: zod.number().describe("Messages archived, for an `all` mailbox."),
   forwarded: zod.number(),
+  notified: zod
+    .number()
+    .describe("Critical matches successfully pushed to Telegram."),
   message: zod.string(),
+});
+
+/**
+ * Resolves the account domain's MX records, probes the conventional hostnames and the MX hosts for a live IMAP/SMTP greeting, and writes back whichever endpoint answers first. This is the automatic remedy for a wrong `mail.<domain>` guess — ENOTFOUND, a refused port, a silent timeout. Stored progress marks are dropped when the IMAP endpoint changes, so the next scan takes a fresh first-scan window; history is untouched. Hostinger accounts are refused, because their servers are preset and an MX host is not the mailbox server.
+ * @summary Look up the account's real mail server and repair its settings
+ */
+export const DiscoverAccountHostParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const DiscoverAccountHostResponse = zod.object({
+  ok: zod
+    .boolean()
+    .describe(
+      "True when a server was found and applied, or when discovery agrees with the stored settings. False when nothing answered or the account is not discoverable (Hostinger).",
+    ),
+  imapFound: zod.boolean(),
+  smtpFound: zod.boolean(),
+  updated: zod
+    .object({
+      id: zod.number(),
+      label: zod.string(),
+      emailAddress: zod.string(),
+      provider: zod
+        .enum(["generic", "hostinger"])
+        .describe(
+          "Where an account's server settings came from. Provenance only: scanning and forwarding treat every account identically.",
+        ),
+      captureMode: zod
+        .enum(["keywords", "all"])
+        .describe(
+          "What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into \/messages and forwards them. `all` also archives every arriving message into \/inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in \/messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.",
+        ),
+      imapHost: zod.string(),
+      imapPort: zod.number(),
+      imapSecure: zod.boolean(),
+      smtpHost: zod.string(),
+      smtpPort: zod.number(),
+      smtpSecure: zod.boolean(),
+      username: zod.string(),
+      allowInvalidCert: zod
+        .boolean()
+        .describe(
+          "Accept a TLS certificate that does not match the hostname. Needed for shared cPanel hosting that serves the provider's certificate on mail.<domain>.",
+        ),
+      active: zod.boolean(),
+      lastCheckedAt: zod.string().nullish(),
+      lastError: zod.string().nullish(),
+      createdAt: zod.string(),
+    })
+    .nullish()
+    .describe(
+      "The account after the repair, or null when nothing was applied. Credentials are never included.",
+    ),
+  message: zod.string().describe("What was found and what was applied."),
 });
 
 /**
@@ -539,6 +604,20 @@ export const listMessagesQueryOffsetMin = 0;
 
 export const ListMessagesQueryParams = zod.object({
   accountId: zod.coerce.number().optional(),
+  search: zod.coerce
+    .string()
+    .optional()
+    .describe(
+      "Case-insensitive substring match against subject, sender, recipient, snippet, and the plain-text body.",
+    ),
+  receivedFrom: zod.coerce
+    .string()
+    .optional()
+    .describe("Only messages received at or after this ISO timestamp."),
+  receivedTo: zod.coerce
+    .string()
+    .optional()
+    .describe("Only messages received at or before this ISO timestamp."),
   limit: zod.coerce
     .number()
     .min(1)
@@ -565,6 +644,11 @@ export const ListMessagesResponseItem = zod.object({
     .boolean()
     .describe("True when the originating account has since been removed."),
   messageUid: zod.string(),
+  folder: zod
+    .string()
+    .describe(
+      "IMAP folder the message was read from, such as INBOX or Junk. A message found outside INBOX has the folder prefixed into messageUid as well, so the two always agree.",
+    ),
   messageId: zod.string().nullish(),
   fromAddress: zod.string(),
   toAddress: zod.string(),
@@ -577,6 +661,113 @@ export const ListMessagesResponseItem = zod.object({
   createdAt: zod.string(),
 });
 export const ListMessagesResponse = zod.array(ListMessagesResponseItem);
+
+/**
+ * Exports the whole email — metadata, keywords, and the complete text and HTML bodies — as a JSON array. Select either explicit `ids` (what was ticked) or the same filters the list accepts (what was searched), so every match for a keyword can be exported in one request regardless of pagination.
+ * @summary Export matched messages to JSON with full bodies
+ */
+export const exportMessagesBodyIdsMax = 200;
+
+export const ExportMessagesBody = zod
+  .object({
+    ids: zod
+      .array(zod.number())
+      .min(1)
+      .max(exportMessagesBodyIdsMax)
+      .optional(),
+    accountId: zod.number().optional(),
+    search: zod.string().optional(),
+    receivedFrom: zod.string().optional(),
+    receivedTo: zod.string().optional(),
+  })
+  .describe(
+    "What to export: explicit `ids` (what was ticked) or, when ids are omitted, every message matching the same filters the list endpoint accepts (what was searched). Omitting both exports everything.",
+  );
+
+export const ExportMessagesResponseItem = zod
+  .object({
+    id: zod.number(),
+    accountId: zod.number(),
+    accountLabel: zod
+      .string()
+      .describe(
+        "Account label as captured at the time. Unchanged by later renames or account removal.",
+      ),
+    accountEmail: zod.string(),
+    accountDeleted: zod.boolean(),
+    messageUid: zod.string(),
+    folder: zod
+      .string()
+      .describe(
+        "IMAP folder the message was read from, such as INBOX or Junk.",
+      ),
+    messageId: zod.string().nullish(),
+    fromAddress: zod.string(),
+    toAddress: zod.string(),
+    subject: zod.string(),
+    snippet: zod.string(),
+    bodyText: zod
+      .string()
+      .nullish()
+      .describe("Full plain-text body, or null when the message had none."),
+    bodyHtml: zod
+      .string()
+      .nullish()
+      .describe(
+        "Full HTML body, or null. Untrusted: render only in a sandboxed frame, never inline.",
+      ),
+    bodyTruncated: zod
+      .boolean()
+      .describe("True when the stored body was cut at the size cap."),
+    receivedAt: zod.string(),
+    createdAt: zod.string(),
+    matchedKeywords: zod
+      .array(zod.string())
+      .optional()
+      .describe("Present only for a keyword-matched message."),
+    forwarded: zod.boolean().optional(),
+    forwardError: zod.string().nullish(),
+  })
+  .describe(
+    "A single captured email with its full body. Shared by \/messages\/{id} and \/inbox\/{id}: keyword fields are present only for a keyword match.",
+  );
+export const ExportMessagesResponse = zod.array(ExportMessagesResponseItem);
+
+/**
+ * @summary Delete several matched messages at once
+ */
+export const deleteMessagesBulkBodyIdsMax = 200;
+
+export const DeleteMessagesBulkBody = zod.object({
+  ids: zod.array(zod.number()).min(1).max(deleteMessagesBulkBodyIdsMax),
+});
+
+export const DeleteMessagesBulkResponse = zod.object({
+  deleted: zod
+    .array(zod.number())
+    .describe("Ids that were live and are now removed."),
+  notFound: zod
+    .array(zod.number())
+    .describe(
+      "Ids that did not match a live account, because they never existed or were already removed. Reported rather than treated as an error, since the end state is the one that was asked for.",
+    ),
+});
+
+/**
+ * Re-tests every archived message with the current keywords, using the same matcher a live scan uses, and surfaces the hits in the Messages queue. Recovers matches that were missed before a keyword was added, or by the older matcher that could not see into HTML entities and link targets. Safe to run repeatedly: already-matched messages are left alone, and nothing found here is forwarded.
+ * @summary Re-run keyword matching over the unfiltered archive
+ */
+export const RecheckArchiveForMatchesResponse = zod.object({
+  scanned: zod
+    .number()
+    .describe("Archived messages re-tested with the current keywords."),
+  inserted: zod
+    .number()
+    .describe(
+      "Messages newly surfaced in the Messages queue. Already-matched messages are left alone, so a repeated run reports only new hits.",
+    ),
+  message: zod.string(),
+});
 
 /**
  * Bodies are excluded from the list endpoint because they are large; fetch them one message at a time.
@@ -598,6 +789,11 @@ export const GetMessageResponse = zod
     accountEmail: zod.string(),
     accountDeleted: zod.boolean(),
     messageUid: zod.string(),
+    folder: zod
+      .string()
+      .describe(
+        "IMAP folder the message was read from, such as INBOX or Junk.",
+      ),
     messageId: zod.string().nullish(),
     fromAddress: zod.string(),
     toAddress: zod.string(),
@@ -656,8 +852,16 @@ export const ListInboxMessagesQueryParams = zod.object({
     .string()
     .optional()
     .describe(
-      "Case-insensitive substring match against subject, sender, and snippet. Ad-hoc lookup, not a stored keyword.",
+      "Case-insensitive substring match against subject, sender, recipient, snippet, and the plain-text body. Ad-hoc lookup, not a stored keyword.",
     ),
+  receivedFrom: zod.coerce
+    .string()
+    .optional()
+    .describe("Only messages received at or after this ISO timestamp."),
+  receivedTo: zod.coerce
+    .string()
+    .optional()
+    .describe("Only messages received at or before this ISO timestamp."),
   limit: zod.coerce
     .number()
     .min(1)
@@ -685,6 +889,11 @@ export const ListInboxMessagesResponseItem = zod
       .boolean()
       .describe("True when the originating account has since been removed."),
     messageUid: zod.string(),
+    folder: zod
+      .string()
+      .describe(
+        "IMAP folder the message was read from, such as INBOX or Junk.",
+      ),
     messageId: zod.string().nullish(),
     fromAddress: zod.string(),
     toAddress: zod.string(),
@@ -699,6 +908,103 @@ export const ListInboxMessagesResponseItem = zod
 export const ListInboxMessagesResponse = zod.array(
   ListInboxMessagesResponseItem,
 );
+
+/**
+ * Exports the whole email — metadata and the complete text and HTML bodies — as a JSON array. Select either explicit `ids` or the same filters the list accepts, so every search match can be exported in one request regardless of pagination.
+ * @summary Export archived messages to JSON with full bodies
+ */
+export const exportInboxMessagesBodyIdsMax = 200;
+
+export const ExportInboxMessagesBody = zod
+  .object({
+    ids: zod
+      .array(zod.number())
+      .min(1)
+      .max(exportInboxMessagesBodyIdsMax)
+      .optional(),
+    accountId: zod.number().optional(),
+    provider: zod
+      .enum(["generic", "hostinger"])
+      .optional()
+      .describe(
+        "Where an account's server settings came from. Provenance only: scanning and forwarding treat every account identically.",
+      ),
+    search: zod.string().optional(),
+    receivedFrom: zod.string().optional(),
+    receivedTo: zod.string().optional(),
+  })
+  .describe("Same selection policy as ExportMessagesBody, for the archive.");
+
+export const ExportInboxMessagesResponseItem = zod
+  .object({
+    id: zod.number(),
+    accountId: zod.number(),
+    accountLabel: zod
+      .string()
+      .describe(
+        "Account label as captured at the time. Unchanged by later renames or account removal.",
+      ),
+    accountEmail: zod.string(),
+    accountDeleted: zod.boolean(),
+    messageUid: zod.string(),
+    folder: zod
+      .string()
+      .describe(
+        "IMAP folder the message was read from, such as INBOX or Junk.",
+      ),
+    messageId: zod.string().nullish(),
+    fromAddress: zod.string(),
+    toAddress: zod.string(),
+    subject: zod.string(),
+    snippet: zod.string(),
+    bodyText: zod
+      .string()
+      .nullish()
+      .describe("Full plain-text body, or null when the message had none."),
+    bodyHtml: zod
+      .string()
+      .nullish()
+      .describe(
+        "Full HTML body, or null. Untrusted: render only in a sandboxed frame, never inline.",
+      ),
+    bodyTruncated: zod
+      .boolean()
+      .describe("True when the stored body was cut at the size cap."),
+    receivedAt: zod.string(),
+    createdAt: zod.string(),
+    matchedKeywords: zod
+      .array(zod.string())
+      .optional()
+      .describe("Present only for a keyword-matched message."),
+    forwarded: zod.boolean().optional(),
+    forwardError: zod.string().nullish(),
+  })
+  .describe(
+    "A single captured email with its full body. Shared by \/messages\/{id} and \/inbox\/{id}: keyword fields are present only for a keyword match.",
+  );
+export const ExportInboxMessagesResponse = zod.array(
+  ExportInboxMessagesResponseItem,
+);
+
+/**
+ * @summary Delete several archived messages at once
+ */
+export const deleteInboxMessagesBulkBodyIdsMax = 200;
+
+export const DeleteInboxMessagesBulkBody = zod.object({
+  ids: zod.array(zod.number()).min(1).max(deleteInboxMessagesBulkBodyIdsMax),
+});
+
+export const DeleteInboxMessagesBulkResponse = zod.object({
+  deleted: zod
+    .array(zod.number())
+    .describe("Ids that were live and are now removed."),
+  notFound: zod
+    .array(zod.number())
+    .describe(
+      "Ids that did not match a live account, because they never existed or were already removed. Reported rather than treated as an error, since the end state is the one that was asked for.",
+    ),
+});
 
 /**
  * @summary One archived message, including its full body
@@ -719,6 +1025,11 @@ export const GetInboxMessageResponse = zod
     accountEmail: zod.string(),
     accountDeleted: zod.boolean(),
     messageUid: zod.string(),
+    folder: zod
+      .string()
+      .describe(
+        "IMAP folder the message was read from, such as INBOX or Junk.",
+      ),
     messageId: zod.string().nullish(),
     fromAddress: zod.string(),
     toAddress: zod.string(),
@@ -762,9 +1073,32 @@ export const DeleteInboxMessageParams = zod.object({
  */
 export const GetSettingsResponse = zod.object({
   keywords: zod.array(zod.string()),
+  criticalKeywords: zod
+    .array(zod.string())
+    .describe(
+      "The short list worth interrupting for: a match also pushes a Telegram message with the whole email and a link to its exact web view.",
+    ),
   forwardToEmail: zod.string().nullish(),
   pollIntervalSeconds: zod.number(),
   forwardingEnabled: zod.boolean(),
+  telegramEnabled: zod
+    .boolean()
+    .describe("Push Telegram alerts for critical matches."),
+  telegramBotTokenSet: zod
+    .boolean()
+    .describe(
+      "True when a bot token is stored. The token itself is never returned; send a new one to replace it, and note that every other settings client sends `telegramBotToken` only when replacing it.",
+    ),
+  telegramChatId: zod
+    .string()
+    .nullish()
+    .describe("The chat that receives the alerts."),
+  appUrl: zod
+    .string()
+    .nullish()
+    .describe(
+      "The public address of this app, used to build the web-view links inside Telegram alerts. Falls back to RENDER_EXTERNAL_URL when unset.",
+    ),
   retainBodiesDays: zod
     .number()
     .describe(
@@ -790,12 +1124,22 @@ export const updateSettingsBodyRetainMessagesDaysMax = 3650;
 
 export const UpdateSettingsBody = zod.object({
   keywords: zod.array(zod.string()).optional(),
+  criticalKeywords: zod.array(zod.string()).optional(),
   forwardToEmail: zod.string().nullish(),
   pollIntervalSeconds: zod
     .number()
     .min(updateSettingsBodyPollIntervalSecondsMin)
     .optional(),
   forwardingEnabled: zod.boolean().optional(),
+  telegramEnabled: zod.boolean().optional(),
+  telegramBotToken: zod
+    .string()
+    .optional()
+    .describe(
+      "The bot token from @BotFather. Omit to keep the stored one; send an empty string to remove it.",
+    ),
+  telegramChatId: zod.string().nullish(),
+  appUrl: zod.string().nullish(),
   retainBodiesDays: zod
     .number()
     .min(updateSettingsBodyRetainBodiesDaysMin)
@@ -810,9 +1154,32 @@ export const UpdateSettingsBody = zod.object({
 
 export const UpdateSettingsResponse = zod.object({
   keywords: zod.array(zod.string()),
+  criticalKeywords: zod
+    .array(zod.string())
+    .describe(
+      "The short list worth interrupting for: a match also pushes a Telegram message with the whole email and a link to its exact web view.",
+    ),
   forwardToEmail: zod.string().nullish(),
   pollIntervalSeconds: zod.number(),
   forwardingEnabled: zod.boolean(),
+  telegramEnabled: zod
+    .boolean()
+    .describe("Push Telegram alerts for critical matches."),
+  telegramBotTokenSet: zod
+    .boolean()
+    .describe(
+      "True when a bot token is stored. The token itself is never returned; send a new one to replace it, and note that every other settings client sends `telegramBotToken` only when replacing it.",
+    ),
+  telegramChatId: zod
+    .string()
+    .nullish()
+    .describe("The chat that receives the alerts."),
+  appUrl: zod
+    .string()
+    .nullish()
+    .describe(
+      "The public address of this app, used to build the web-view links inside Telegram alerts. Falls back to RENDER_EXTERNAL_URL when unset.",
+    ),
   retainBodiesDays: zod
     .number()
     .describe(
@@ -824,6 +1191,72 @@ export const UpdateSettingsResponse = zod.object({
       "Delete messages older than this many days outright. 0 keeps them forever.",
     ),
 });
+
+/**
+ * Verifies the bot token and chat id by delivering one message, so a typo surfaces during setup rather than when a critical match fails to arrive.
+ * @summary Send a test Telegram message with the stored configuration
+ */
+export const TestTelegramResponse = zod.object({
+  ok: zod.boolean(),
+  message: zod.string(),
+});
+
+/**
+ * Telegram alerts carry a link here so a critical match can be opened without a session. The token is an HMAC over the message id and an expiry, signed with the app's session key material: it cannot be forged or enumerated, it expires on its own (30 days), and changing the app password invalidates it. It grants exactly one message and nothing else.
+ * @summary One stored message by signed, expiring link
+ */
+
+export const GetViewMessageParams = zod.object({
+  token: zod.coerce.string().min(1),
+});
+
+export const GetViewMessageResponse = zod
+  .object({
+    id: zod.number(),
+    accountId: zod.number(),
+    accountLabel: zod
+      .string()
+      .describe(
+        "Account label as captured at the time. Unchanged by later renames or account removal.",
+      ),
+    accountEmail: zod.string(),
+    accountDeleted: zod.boolean(),
+    messageUid: zod.string(),
+    folder: zod
+      .string()
+      .describe(
+        "IMAP folder the message was read from, such as INBOX or Junk.",
+      ),
+    messageId: zod.string().nullish(),
+    fromAddress: zod.string(),
+    toAddress: zod.string(),
+    subject: zod.string(),
+    snippet: zod.string(),
+    bodyText: zod
+      .string()
+      .nullish()
+      .describe("Full plain-text body, or null when the message had none."),
+    bodyHtml: zod
+      .string()
+      .nullish()
+      .describe(
+        "Full HTML body, or null. Untrusted: render only in a sandboxed frame, never inline.",
+      ),
+    bodyTruncated: zod
+      .boolean()
+      .describe("True when the stored body was cut at the size cap."),
+    receivedAt: zod.string(),
+    createdAt: zod.string(),
+    matchedKeywords: zod
+      .array(zod.string())
+      .optional()
+      .describe("Present only for a keyword-matched message."),
+    forwarded: zod.boolean().optional(),
+    forwardError: zod.string().nullish(),
+  })
+  .describe(
+    "A single captured email with its full body. Shared by \/messages\/{id} and \/inbox\/{id}: keyword fields are present only for a keyword match.",
+  );
 
 /**
  * @summary Dashboard summary stats
