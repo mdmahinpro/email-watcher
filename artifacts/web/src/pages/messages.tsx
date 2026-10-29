@@ -9,6 +9,7 @@ import {
   useDeleteMessage,
   useExportMessages,
   useDeleteMessagesBulk,
+  useListMessageIds,
   useRecheckArchiveForMatches,
   getGetStatsSummaryQueryKey,
   getGetKeywordBreakdownQueryKey,
@@ -60,6 +61,8 @@ import {
 const PAGE_SIZE = 50;
 /** Long enough that typing does not fire a request per keystroke. */
 const SEARCH_DEBOUNCE_MS = 350;
+/** Mirrors the server's per-request id cap (export and selection). */
+const MAX_BULK_IDS = 2000;
 
 /** Saves any payload as a pretty-printed JSON file download. */
 function downloadJson(filename: string, data: unknown) {
@@ -79,7 +82,16 @@ export default function Messages() {
   const [searchInput, setSearchInput] = useState("");
   const [openId, setOpenId] = useState<number | null>(null);
   const [page, setPage] = useState(0);
+  // Selection persists across pages: ticks made on page 1 must still be part
+  // of the export when the user is browsing page 3.
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  // Subjects for the rows the user has seen selected, so the delete
+  // confirmation can name what it is about to remove. Cross-page selections
+  // from "Select all matching" arrive as bare ids; those rows are summarized
+  // by count rather than fetched just for a confirmation dialog.
+  const [selectedSubjects, setSelectedSubjects] = useState<Map<number, string>>(
+    new Map(),
+  );
 
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -192,6 +204,7 @@ export default function Messages() {
               : undefined,
         });
         setSelectedIds(new Set());
+        setSelectedSubjects(new Map());
         invalidateMessageViews();
       },
       onError: (err) => {
@@ -223,23 +236,86 @@ export default function Messages() {
     },
   });
 
-  // Derived, not raw: a refetch can drop a row that is still in selectedIds.
-  // Reading the selection through the visible list keeps the count and the ids
-  // sent to the server in agreement, and it self-heals without an effect.
-  const selectedMessages = messagesList.filter((m) => selectedIds.has(m.id));
-  const selectedCount = selectedMessages.length;
+  // "Select all matching": fetches the id of every message matching the
+  // current search and account filter in one request, so a selection can span
+  // pages the user has never visited.
+  const listMessageIds = useListMessageIds({
+    mutation: {
+      onSuccess: (data) => {
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          for (const id of data.ids) next.add(id);
+          return next;
+        });
+        toast({
+          title: `Selected ${data.ids.length} message${data.ids.length === 1 ? "" : "s"} across all pages`,
+          description: data.truncated
+            ? "Only the newest 2000 can be selected at once; narrow the search to reach the rest."
+            : undefined,
+        });
+      },
+      onError: (err) => {
+        toast({
+          title: "Could not select all",
+          description: err.message,
+          variant: "destructive",
+        });
+      },
+    },
+  });
 
-  const toggleSelected = (id: number) => {
+  // Raw, not derived from the visible page: a selection that loses its
+  // page-one rows the moment the user turns to page two is exactly the bug
+  // this replaces.
+  const selectedCount = selectedIds.size;
+  const visibleSelected = messagesList.filter((m) => selectedIds.has(m.id));
+  const offPageCount = selectedCount - visibleSelected.length;
+  const allVisibleSelected =
+    messagesList.length > 0 && visibleSelected.length === messagesList.length;
+
+  const toggleSelected = (id: number, subject: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+    setSelectedSubjects((prev) => {
+      const next = new Map(prev);
+      if (next.has(id)) next.delete(id);
+      else next.set(id, subject);
+      return next;
+    });
   };
-  const selectPage = () =>
-    setSelectedIds(new Set(messagesList.map((m) => m.id)));
-  const clearSelection = () => setSelectedIds(new Set());
+
+  // Toggles this page into the selection: adds every row on the page, or
+  // removes them again when they are all already in. Because the selection is
+  // a set, walking pages and pressing this builds a cross-page selection.
+  const togglePage = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const m of messagesList) {
+        if (allVisibleSelected) next.delete(m.id);
+        else next.add(m.id);
+      }
+      return next;
+    });
+    setSelectedSubjects((prev) => {
+      const next = new Map(prev);
+      for (const m of messagesList) {
+        if (allVisibleSelected) next.delete(m.id);
+        else next.set(m.id, m.subject);
+      }
+      return next;
+    });
+  };
+
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+    setSelectedSubjects(new Map());
+  };
+
+  const selectedIdList = () => [...selectedIds].slice(0, MAX_BULK_IDS);
 
   const onFilterChange = (value: string) => {
     setSelectedAccountId(value);
@@ -344,12 +420,37 @@ export default function Messages() {
               <span className="text-sm font-semibold text-foreground">
                 {selectedCount} selected
               </span>
+              {offPageCount > 0 ? (
+                <span className="text-xs text-muted-foreground">
+                  ({offPageCount} on other pages)
+                </span>
+              ) : null}
               <button
                 type="button"
-                onClick={selectPage}
+                onClick={togglePage}
                 className="text-xs font-medium text-sidebar-primary hover:underline"
               >
-                Select page
+                {allVisibleSelected ? "Deselect page" : "Select page"}
+              </button>
+              <button
+                type="button"
+                disabled={listMessageIds.isPending}
+                title="Select every message matching the current search and account filter, on every page — not just the visible one."
+                onClick={() =>
+                  listMessageIds.mutate({
+                    data: {
+                      ...(accountIdParam !== undefined
+                        ? { accountId: accountIdParam }
+                        : {}),
+                      ...(search ? { search } : {}),
+                    },
+                  })
+                }
+                className="text-xs font-medium text-sidebar-primary hover:underline disabled:opacity-50"
+              >
+                {listMessageIds.isPending
+                  ? "Selecting all..."
+                  : "Select all matching"}
               </button>
               <button
                 type="button"
@@ -368,7 +469,7 @@ export default function Messages() {
                 disabled={exportMessages.isPending}
                 onClick={() =>
                   exportMessages.mutate({
-                    data: { ids: selectedMessages.map((m) => m.id) },
+                    data: { ids: selectedIdList() },
                   })
                 }
               >
@@ -401,11 +502,14 @@ export default function Messages() {
                       They are removed from the queue permanently. The same
                       email is not re-captured, because scans only read mail
                       that arrives after the last pass.
+                      {selectedCount > MAX_BULK_IDS
+                        ? ` Only the newest ${MAX_BULK_IDS} are deleted at once; narrow the search to reach the rest.`
+                        : ""}
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <div className="max-h-40 overflow-y-auto rounded-xl border border-white/10 bg-black/20 p-2.5">
                     <ul className="space-y-1">
-                      {selectedMessages.map((m) => (
+                      {visibleSelected.map((m) => (
                         <li
                           key={m.id}
                           className="pin-break text-xs text-muted-foreground"
@@ -413,6 +517,11 @@ export default function Messages() {
                           {m.subject}
                         </li>
                       ))}
+                      {offPageCount > 0 ? (
+                        <li className="text-xs italic text-muted-foreground">
+                          …and {offPageCount} more selected on other pages
+                        </li>
+                      ) : null}
                     </ul>
                   </div>
                   <AlertDialogFooter>
@@ -423,11 +532,11 @@ export default function Messages() {
                       className="rounded-full bg-destructive text-destructive-foreground hover:bg-destructive/90"
                       onClick={() =>
                         deleteBulk.mutate({
-                          data: { ids: selectedMessages.map((m) => m.id) },
+                          data: { ids: selectedIdList() },
                         })
                       }
                     >
-                      Delete {selectedCount}
+                      Delete {Math.min(selectedCount, MAX_BULK_IDS)}
                     </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
@@ -466,7 +575,7 @@ export default function Messages() {
                   >
                     <Checkbox
                       checked={isSelected}
-                      onCheckedChange={() => toggleSelected(msg.id)}
+                      onCheckedChange={() => toggleSelected(msg.id, msg.subject)}
                       aria-label={`Select ${msg.subject}`}
                     />
                   </label>

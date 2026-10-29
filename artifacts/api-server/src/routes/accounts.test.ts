@@ -1532,6 +1532,41 @@ describe("POST /api/messages/delete-bulk", () => {
   });
 });
 
+describe("POST /api/messages/ids", () => {
+  it("returns the ids of every match, newest first", async () => {
+    dbMock.enqueue([{ id: 9 }, { id: 4 }, { id: 2 }]);
+
+    const res = await request
+      .post("/api/messages/ids")
+      .send({ search: "claim" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ids: [9, 4, 2], truncated: false });
+    // One extra row fetched so truncation is detectable without a count query.
+    expect(dbMock.argsOf("limit")).toEqual([2001]);
+  });
+
+  it("flags truncation at the selection cap", async () => {
+    dbMock.enqueue(
+      Array.from({ length: 2001 }, (_, i) => ({ id: i + 1 })),
+    );
+
+    const res = await request.post("/api/messages/ids").send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.truncated).toBe(true);
+    expect(res.body.ids).toHaveLength(2000);
+  });
+
+  it("rejects an invalid date filter", async () => {
+    const res = await request
+      .post("/api/messages/ids")
+      .send({ receivedFrom: "not-a-date" });
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("POST /api/messages/recheck-archive", () => {
   const archivedRow = (overrides: Record<string, unknown> = {}) => ({
     id: 50,

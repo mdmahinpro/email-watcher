@@ -39,7 +39,9 @@ import type {
   InboxMessage,
   KeywordCount,
   ListAccountsParams,
+  ListInboxMessageIdsBody,
   ListInboxMessagesParams,
+  ListMessageIdsBody,
   ListMessagesParams,
   LoginBody,
   MatchedMessage,
@@ -47,6 +49,7 @@ import type {
   RecheckArchiveResult,
   ScanAllAccountsParams,
   ScanResult,
+  SelectedIdsResult,
   StatsSummary,
   TestAllAccountsParams,
   TestResult,
@@ -1696,6 +1699,93 @@ export const useExportMessages = <
 };
 
 /**
+ * Powers "select all matching" across pages: a search can span many pages, and ticking each page by hand is not a workflow. Accepts the same filters as the list endpoint and returns the matching ids, newest first, capped at 2000 with a truncation flag.
+ * @summary Ids of every message matching the current filters
+ */
+export const getListMessageIdsUrl = () => {
+  return `/api/messages/ids`;
+};
+
+export const listMessageIds = async (
+  listMessageIdsBody: ListMessageIdsBody,
+  options?: RequestInit,
+): Promise<SelectedIdsResult> => {
+  return customFetch<SelectedIdsResult>(getListMessageIdsUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(listMessageIdsBody),
+  });
+};
+
+export const getListMessageIdsMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof listMessageIds>>,
+    TError,
+    { data: BodyType<ListMessageIdsBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof listMessageIds>>,
+  TError,
+  { data: BodyType<ListMessageIdsBody> },
+  TContext
+> => {
+  const mutationKey = ["listMessageIds"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof listMessageIds>>,
+    { data: BodyType<ListMessageIdsBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return listMessageIds(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ListMessageIdsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof listMessageIds>>
+>;
+export type ListMessageIdsMutationBody = BodyType<ListMessageIdsBody>;
+export type ListMessageIdsMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Ids of every message matching the current filters
+ */
+export const useListMessageIds = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof listMessageIds>>,
+    TError,
+    { data: BodyType<ListMessageIdsBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof listMessageIds>>,
+  TError,
+  { data: BodyType<ListMessageIdsBody> },
+  TContext
+> => {
+  return useMutation(getListMessageIdsMutationOptions(options));
+};
+
+/**
  * @summary Delete several matched messages at once
  */
 export const getDeleteMessagesBulkUrl = () => {
@@ -2218,6 +2308,93 @@ export const useExportInboxMessages = <
   TContext
 > => {
   return useMutation(getExportInboxMessagesMutationOptions(options));
+};
+
+/**
+ * Powers "select all matching" across pages for the archive; same policy as /messages/ids.
+ * @summary Ids of every archived message matching the current filters
+ */
+export const getListInboxMessageIdsUrl = () => {
+  return `/api/inbox/ids`;
+};
+
+export const listInboxMessageIds = async (
+  listInboxMessageIdsBody: ListInboxMessageIdsBody,
+  options?: RequestInit,
+): Promise<SelectedIdsResult> => {
+  return customFetch<SelectedIdsResult>(getListInboxMessageIdsUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(listInboxMessageIdsBody),
+  });
+};
+
+export const getListInboxMessageIdsMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof listInboxMessageIds>>,
+    TError,
+    { data: BodyType<ListInboxMessageIdsBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof listInboxMessageIds>>,
+  TError,
+  { data: BodyType<ListInboxMessageIdsBody> },
+  TContext
+> => {
+  const mutationKey = ["listInboxMessageIds"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof listInboxMessageIds>>,
+    { data: BodyType<ListInboxMessageIdsBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return listInboxMessageIds(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ListInboxMessageIdsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof listInboxMessageIds>>
+>;
+export type ListInboxMessageIdsMutationBody = BodyType<ListInboxMessageIdsBody>;
+export type ListInboxMessageIdsMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Ids of every archived message matching the current filters
+ */
+export const useListInboxMessageIds = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof listInboxMessageIds>>,
+    TError,
+    { data: BodyType<ListInboxMessageIdsBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof listInboxMessageIds>>,
+  TError,
+  { data: BodyType<ListInboxMessageIdsBody> },
+  TContext
+> => {
+  return useMutation(getListInboxMessageIdsMutationOptions(options));
 };
 
 /**

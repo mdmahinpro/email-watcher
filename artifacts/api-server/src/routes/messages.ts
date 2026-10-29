@@ -12,6 +12,7 @@ import {
   ListMessagesQueryParams,
   ExportMessagesBody,
   DeleteMessagesBulkBody,
+  ListMessageIdsBody,
 } from "@workspace/api-zod";
 import { serializeDetail } from "../lib/message-detail";
 import { buildKeywordHaystack, findKeywordMatches } from "../lib/scan-planner";
@@ -306,6 +307,60 @@ router.post("/messages/export", async (req, res) => {
   }
 
   res.json(exportRows.map((row) => serializeDetail(row)));
+});
+
+/**
+ * Ids of every message matching the current filters.
+ *
+ * Powers "select all matching" in the UI: a search can span many pages, and
+ * ticking each page by hand is not a workflow. Returns ids, not rows — one
+ * integer per match keeps the payload small even at the cap — newest first,
+ * so the selection order matches what the pages showed.
+ */
+router.post("/messages/ids", async (req, res) => {
+  const body = ListMessageIdsBody.parse(req.body);
+
+  const receivedFrom = parseDateParam(body.receivedFrom);
+  const receivedTo = parseDateParam(body.receivedTo);
+  if (body.receivedFrom !== undefined && receivedFrom === null) {
+    res
+      .status(400)
+      .json({ error: "ValidationError", message: "receivedFrom is not a valid date" });
+    return;
+  }
+  if (body.receivedTo !== undefined && receivedTo === null) {
+    res
+      .status(400)
+      .json({ error: "ValidationError", message: "receivedTo is not a valid date" });
+    return;
+  }
+
+  const filters = buildMatchedFilters({
+    accountId: body.accountId,
+    search: body.search,
+    receivedFrom: receivedFrom ?? undefined,
+    receivedTo: receivedTo ?? undefined,
+  });
+
+  // One extra row to detect truncation without a count query, mirroring the
+  // export endpoint's approach.
+  const rows = await db
+    .select({ id: matchedMessagesTable.id })
+    .from(matchedMessagesTable)
+    .where(filters.length > 0 ? and(...filters) : undefined)
+    .orderBy(
+      desc(matchedMessagesTable.receivedAt),
+      desc(matchedMessagesTable.id),
+    )
+    .limit(EXPORT_MAX_ROWS + 1);
+
+  const truncated = rows.length > EXPORT_MAX_ROWS;
+  const ids = (truncated ? rows.slice(0, EXPORT_MAX_ROWS) : rows).map((r) => r.id);
+  if (truncated) {
+    logger.warn({ requested: body }, "Id selection truncated at cap");
+  }
+
+  res.json({ ids, truncated });
 });
 
 router.delete("/messages/:id", async (req, res) => {

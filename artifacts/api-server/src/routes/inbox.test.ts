@@ -290,6 +290,40 @@ describe("DELETE /api/inbox/:id", () => {
   });
 });
 
+describe("POST /api/inbox/ids", () => {
+  it("returns the ids of every archive match for the filters", async () => {
+    dbMock.enqueue([{ id: 7 }, { id: 3 }]);
+
+    const res = await request
+      .post("/api/inbox/ids")
+      .send({ provider: "hostinger", search: "order" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ids: [7, 3], truncated: false });
+    expect(dbMock.argsOf("limit")).toEqual([2001]);
+  });
+
+  it("flags truncation at the selection cap", async () => {
+    dbMock.enqueue(
+      Array.from({ length: 2001 }, (_, i) => ({ id: i + 1 })),
+    );
+
+    const res = await request.post("/api/inbox/ids").send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.truncated).toBe(true);
+    expect(res.body.ids).toHaveLength(2000);
+  });
+
+  it("rejects an invalid date filter", async () => {
+    const res = await request
+      .post("/api/inbox/ids")
+      .send({ receivedTo: "yesterday" });
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("POST /api/inbox/export", () => {
   it("exports the selected ids with their full bodies", async () => {
     dbMock.enqueue([

@@ -666,7 +666,7 @@ export const ListMessagesResponse = zod.array(ListMessagesResponseItem);
  * Exports the whole email — metadata, keywords, and the complete text and HTML bodies — as a JSON array. Select either explicit `ids` (what was ticked) or the same filters the list accepts (what was searched), so every match for a keyword can be exported in one request regardless of pagination.
  * @summary Export matched messages to JSON with full bodies
  */
-export const exportMessagesBodyIdsMax = 200;
+export const exportMessagesBodyIdsMax = 2000;
 
 export const ExportMessagesBody = zod
   .object({
@@ -734,9 +734,37 @@ export const ExportMessagesResponseItem = zod
 export const ExportMessagesResponse = zod.array(ExportMessagesResponseItem);
 
 /**
+ * Powers "select all matching" across pages: a search can span many pages, and ticking each page by hand is not a workflow. Accepts the same filters as the list endpoint and returns the matching ids, newest first, capped at 2000 with a truncation flag.
+ * @summary Ids of every message matching the current filters
+ */
+export const ListMessageIdsBody = zod
+  .object({
+    accountId: zod.number().optional(),
+    search: zod.string().optional(),
+    receivedFrom: zod.string().optional(),
+    receivedTo: zod.string().optional(),
+  })
+  .describe(
+    "Which messages to select: every match for these filters, the same ones the list endpoint accepts.",
+  );
+
+export const ListMessageIdsResponse = zod.object({
+  ids: zod
+    .array(zod.number())
+    .describe(
+      'Every matching message id, newest first, so \"select all matching\" spans pages without loading any of them.',
+    ),
+  truncated: zod
+    .boolean()
+    .describe(
+      "True when matches exist beyond the selection cap of 2000 — the ids cover the newest 2000.",
+    ),
+});
+
+/**
  * @summary Delete several matched messages at once
  */
-export const deleteMessagesBulkBodyIdsMax = 200;
+export const deleteMessagesBulkBodyIdsMax = 2000;
 
 export const DeleteMessagesBulkBody = zod.object({
   ids: zod.array(zod.number()).min(1).max(deleteMessagesBulkBodyIdsMax),
@@ -913,7 +941,7 @@ export const ListInboxMessagesResponse = zod.array(
  * Exports the whole email — metadata and the complete text and HTML bodies — as a JSON array. Select either explicit `ids` or the same filters the list accepts, so every search match can be exported in one request regardless of pagination.
  * @summary Export archived messages to JSON with full bodies
  */
-export const exportInboxMessagesBodyIdsMax = 200;
+export const exportInboxMessagesBodyIdsMax = 2000;
 
 export const ExportInboxMessagesBody = zod
   .object({
@@ -987,9 +1015,41 @@ export const ExportInboxMessagesResponse = zod.array(
 );
 
 /**
+ * Powers "select all matching" across pages for the archive; same policy as /messages/ids.
+ * @summary Ids of every archived message matching the current filters
+ */
+export const ListInboxMessageIdsBody = zod
+  .object({
+    accountId: zod.number().optional(),
+    provider: zod
+      .enum(["generic", "hostinger"])
+      .optional()
+      .describe(
+        "Where an account's server settings came from. Provenance only: scanning and forwarding treat every account identically.",
+      ),
+    search: zod.string().optional(),
+    receivedFrom: zod.string().optional(),
+    receivedTo: zod.string().optional(),
+  })
+  .describe("Same filters as ListMessageIdsBody, for the archive.");
+
+export const ListInboxMessageIdsResponse = zod.object({
+  ids: zod
+    .array(zod.number())
+    .describe(
+      'Every matching message id, newest first, so \"select all matching\" spans pages without loading any of them.',
+    ),
+  truncated: zod
+    .boolean()
+    .describe(
+      "True when matches exist beyond the selection cap of 2000 — the ids cover the newest 2000.",
+    ),
+});
+
+/**
  * @summary Delete several archived messages at once
  */
-export const deleteInboxMessagesBulkBodyIdsMax = 200;
+export const deleteInboxMessagesBulkBodyIdsMax = 2000;
 
 export const DeleteInboxMessagesBulkBody = zod.object({
   ids: zod.array(zod.number()).min(1).max(deleteInboxMessagesBulkBodyIdsMax),

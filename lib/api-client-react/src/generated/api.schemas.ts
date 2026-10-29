@@ -378,7 +378,7 @@ export interface BulkDeleteResult {
 export interface DeleteMessagesBulkBody {
   /**
    * @minItems 1
-   * @maxItems 200
+   * @maxItems 2000
    */
   ids: number[];
 }
@@ -386,7 +386,7 @@ export interface DeleteMessagesBulkBody {
 export interface DeleteInboxMessagesBulkBody {
   /**
    * @minItems 1
-   * @maxItems 200
+   * @maxItems 2000
    */
   ids: number[];
 }
@@ -397,7 +397,7 @@ export interface DeleteInboxMessagesBulkBody {
 export interface ExportMessagesBody {
   /**
    * @minItems 1
-   * @maxItems 200
+   * @maxItems 2000
    */
   ids?: number[];
   accountId?: number;
@@ -412,7 +412,7 @@ export interface ExportMessagesBody {
 export interface ExportInboxMessagesBody {
   /**
    * @minItems 1
-   * @maxItems 200
+   * @maxItems 2000
    */
   ids?: number[];
   accountId?: number;
@@ -420,6 +420,34 @@ export interface ExportInboxMessagesBody {
   search?: string;
   receivedFrom?: string;
   receivedTo?: string;
+}
+
+/**
+ * Which messages to select: every match for these filters, the same ones the list endpoint accepts.
+ */
+export interface ListMessageIdsBody {
+  accountId?: number;
+  search?: string;
+  receivedFrom?: string;
+  receivedTo?: string;
+}
+
+/**
+ * Same filters as ListMessageIdsBody, for the archive.
+ */
+export interface ListInboxMessageIdsBody {
+  accountId?: number;
+  provider?: AccountProvider;
+  search?: string;
+  receivedFrom?: string;
+  receivedTo?: string;
+}
+
+export interface SelectedIdsResult {
+  /** Every matching message id, newest first, so "select all matching" spans pages without loading any of them. */
+  ids: number[];
+  /** True when matches exist beyond the selection cap of 2000 — the ids cover the newest 2000. */
+  truncated: boolean;
 }
 
 export interface RecheckArchiveResult {

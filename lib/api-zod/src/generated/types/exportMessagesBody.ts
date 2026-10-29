@@ -12,7 +12,7 @@
 export interface ExportMessagesBody {
   /**
    * @minItems 1
-   * @maxItems 200
+   * @maxItems 2000
    */
   ids?: number[];
   accountId?: number;

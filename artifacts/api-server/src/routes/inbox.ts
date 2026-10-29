@@ -11,6 +11,7 @@ import {
   ListInboxMessagesQueryParams,
   ExportInboxMessagesBody,
   DeleteInboxMessagesBulkBody,
+  ListInboxMessageIdsBody,
 } from "@workspace/api-zod";
 import { serializeDetail, type DetailRow } from "../lib/message-detail";
 import { logger } from "../lib/logger";
@@ -259,6 +260,58 @@ router.post("/inbox/export", async (req, res) => {
       serializeDetail(row satisfies DetailRow & { accountDeletedAt: Date | null }),
     ),
   );
+});
+
+/**
+ * Ids of every archived message matching the current filters.
+ *
+ * Powers "select all matching" across pages for the archive; same policy as
+ * /messages/ids.
+ */
+router.post("/inbox/ids", async (req, res) => {
+  const body = ListInboxMessageIdsBody.parse(req.body);
+
+  const receivedFrom = parseDateParam(body.receivedFrom);
+  const receivedTo = parseDateParam(body.receivedTo);
+  if (body.receivedFrom !== undefined && receivedFrom === null) {
+    res
+      .status(400)
+      .json({ error: "ValidationError", message: "receivedFrom is not a valid date" });
+    return;
+  }
+  if (body.receivedTo !== undefined && receivedTo === null) {
+    res
+      .status(400)
+      .json({ error: "ValidationError", message: "receivedTo is not a valid date" });
+    return;
+  }
+
+  const filters = buildInboxFilters({
+    accountId: body.accountId,
+    provider: body.provider,
+    search: body.search,
+    receivedFrom: receivedFrom ?? undefined,
+    receivedTo: receivedTo ?? undefined,
+  });
+
+  const rows = await db
+    .select({ id: inboxMessagesTable.id })
+    .from(inboxMessagesTable)
+    .leftJoin(
+      emailAccountsTable,
+      eq(emailAccountsTable.id, inboxMessagesTable.accountId),
+    )
+    .where(filters.length > 0 ? and(...filters) : sql`true`)
+    .orderBy(desc(inboxMessagesTable.receivedAt), desc(inboxMessagesTable.id))
+    .limit(EXPORT_MAX_ROWS + 1);
+
+  const truncated = rows.length > EXPORT_MAX_ROWS;
+  const ids = (truncated ? rows.slice(0, EXPORT_MAX_ROWS) : rows).map((r) => r.id);
+  if (truncated) {
+    logger.warn({ requested: body }, "Id selection truncated at cap");
+  }
+
+  res.json({ ids, truncated });
 });
 
 router.delete("/inbox/:id", async (req, res) => {

@@ -439,6 +439,29 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/MessageDetail"
+  /messages/ids:
+    post:
+      operationId: listMessageIds
+      tags: [messages]
+      summary: Ids of every message matching the current filters
+      description: >-
+        Powers "select all matching" across pages: a search can span many
+        pages, and ticking each page by hand is not a workflow. Accepts the
+        same filters as the list endpoint and returns the matching ids,
+        newest first, capped at 2000 with a truncation flag.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ListMessageIdsBody"
+      responses:
+        "200":
+          description: Matching ids
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SelectedIdsResult"
   /messages/delete-bulk:
     post:
       operationId: deleteMessagesBulk
@@ -604,6 +627,27 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/MessageDetail"
+  /inbox/ids:
+    post:
+      operationId: listInboxMessageIds
+      tags: [inbox]
+      summary: Ids of every archived message matching the current filters
+      description: >-
+        Powers "select all matching" across pages for the archive; same
+        policy as /messages/ids.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ListInboxMessageIdsBody"
+      responses:
+        "200":
+          description: Matching ids
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SelectedIdsResult"
   /inbox/delete-bulk:
     post:
       operationId: deleteInboxMessagesBulk
@@ -1551,7 +1595,7 @@ components:
         ids:
           type: array
           minItems: 1
-          maxItems: 200
+          maxItems: 2000
           items:
             type: integer
       required:
@@ -1563,7 +1607,7 @@ components:
         ids:
           type: array
           minItems: 1
-          maxItems: 200
+          maxItems: 2000
           items:
             type: integer
       required:
@@ -1579,7 +1623,7 @@ components:
         ids:
           type: array
           minItems: 1
-          maxItems: 200
+          maxItems: 2000
           items:
             type: integer
         accountId:
@@ -1598,7 +1642,7 @@ components:
         ids:
           type: array
           minItems: 1
-          maxItems: 200
+          maxItems: 2000
           items:
             type: integer
         accountId:
@@ -1611,6 +1655,55 @@ components:
           type: string
         receivedTo:
           type: string
+
+    ListMessageIdsBody:
+      description: >-
+        Which messages to select: every match for these filters, the same ones
+        the list endpoint accepts.
+      type: object
+      properties:
+        accountId:
+          type: integer
+        search:
+          type: string
+        receivedFrom:
+          type: string
+        receivedTo:
+          type: string
+
+    ListInboxMessageIdsBody:
+      description: Same filters as ListMessageIdsBody, for the archive.
+      type: object
+      properties:
+        accountId:
+          type: integer
+        provider:
+          $ref: "#/components/schemas/AccountProvider"
+        search:
+          type: string
+        receivedFrom:
+          type: string
+        receivedTo:
+          type: string
+
+    SelectedIdsResult:
+      type: object
+      properties:
+        ids:
+          description: >-
+            Every matching message id, newest first, so "select all matching"
+            spans pages without loading any of them.
+          type: array
+          items:
+            type: integer
+        truncated:
+          description: >-
+            True when matches exist beyond the selection cap of 2000 — the
+            ids cover the newest 2000.
+          type: boolean
+      required:
+        - ids
+        - truncated
 
     RecheckArchiveResult:
       type: object
