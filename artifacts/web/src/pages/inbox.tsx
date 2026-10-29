@@ -371,14 +371,27 @@ export default function InboxPage() {
         </div>
       ) : null}
 
-      {/* Selection bar. Sticky at the top, matching the Accounts page. */}
-      {selectedCount > 0 ? (
+      {/* Selection bar. Sticky at the top, matching the Accounts page.
+          Always visible while there are messages to select: "Select all
+          matching" is the point of the toolbar, and hiding it until something
+          is already ticked is how the option ended up undiscoverable. */}
+      {!isLoading && messagesList.length > 0 ? (
         <div className="sticky top-14 z-30 md:top-0">
-          <div className="pin-card flex flex-wrap items-center justify-between gap-3 border border-sidebar-primary/40 p-3 sm:p-4">
+          <div
+            className={`pin-card flex flex-wrap items-center justify-between gap-3 p-3 sm:p-4 ${
+              selectedCount > 0 ? "border border-sidebar-primary/40" : ""
+            }`}
+          >
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span className="text-sm font-semibold text-foreground">
-                {selectedCount} selected
-              </span>
+              {selectedCount > 0 ? (
+                <span className="text-sm font-semibold text-foreground">
+                  {selectedCount} selected
+                </span>
+              ) : (
+                <span className="text-xs text-muted-foreground">
+                  Nothing selected
+                </span>
+              )}
               {offPageCount > 0 ? (
                 <span className="text-xs text-muted-foreground">
                   ({offPageCount} on other pages)
@@ -412,16 +425,19 @@ export default function InboxPage() {
                   ? "Selecting all..."
                   : "Select all matching"}
               </button>
-              <button
-                type="button"
-                onClick={clearSelection}
-                className="text-xs font-medium text-muted-foreground hover:underline"
-              >
-                Clear
-              </button>
+              {selectedCount > 0 ? (
+                <button
+                  type="button"
+                  onClick={clearSelection}
+                  className="text-xs font-medium text-muted-foreground hover:underline"
+                >
+                  Clear
+                </button>
+              ) : null}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            {selectedCount > 0 ? (
+              <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -501,7 +517,8 @@ export default function InboxPage() {
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
-            </div>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
