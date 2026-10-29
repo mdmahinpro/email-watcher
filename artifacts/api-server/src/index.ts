@@ -32,6 +32,14 @@ const run = async () => {
     );
   }
 
+  // The code queries columns the database may not have yet (a deploy can ship
+  // faster than a migration). Applying the additive statements here means the
+  // server never serves a request its schema cannot answer, on any plan, with
+  // nothing for the operator to remember. Runs before listen on purpose: a
+  // failure here exits the process rather than letting it serve 500s.
+  const { ensureSchema } = await import("./lib/bootstrap-schema");
+  await ensureSchema();
+
   // Bind on all interfaces: a container host routes external traffic to the
   // container's address, and binding loopback-only would make the service
   // unreachable and fail its health check.

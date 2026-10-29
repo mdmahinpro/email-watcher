@@ -480,7 +480,7 @@ pnpm --filter @workspace/scripts run icons
 - `pnpm run start` — run the built server (serves the SPA too)
 - `pnpm --filter @workspace/scripts run icons` — regenerate favicon/PWA rasters
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas
-- `pnpm --filter @workspace/db run push` — push DB schema changes (local dev; on Render it runs automatically as the service's pre-deploy command, so additive changes arrive with the deploy)
+- `pnpm --filter @workspace/db run push` — push DB schema changes (local dev). On Render, no manual step and no pre-deploy command (a free instance is too small to run one): the server applies its additive `ADD COLUMN IF NOT EXISTS` statements at startup, before serving, in `api-server/src/lib/bootstrap-schema.ts`. When the schema changes, append the new column to that list.
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
 - `pnpm --filter @workspace/web run dev` — run frontend locally
 

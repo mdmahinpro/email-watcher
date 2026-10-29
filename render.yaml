@@ -19,14 +19,12 @@ services:
     region: oregon
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm run build:deploy
     startCommand: pnpm run start
-    # Schema changes are applied here, before the new version takes traffic, so
-    # a deploy never starts code whose columns are missing — and so the operator
-    # never has to run drizzle-kit by hand. `push` is additive-safe: purely
-    # additive changes (new tables, new columns) apply without any prompt. If a
-    # future change would drop or rewrite data, drizzle-kit asks for
-    # confirmation, has no terminal to answer in, and fails the deploy instead —
-    # which is the safe outcome; run such a migration by hand after reviewing it.
-    preDeployCommand: pnpm --filter @workspace/db run push
+    # No preDeployCommand: pre-deploy commands need at least 1 GB of RAM, and a
+    # free instance has 512 MB, so the schema is ensured at startup instead
+    # (api-server/src/lib/bootstrap-schema.ts). The server applies its own
+    # additive `ADD COLUMN IF NOT EXISTS` statements before it accepts traffic,
+    # so a deploy can never outrun the database schema, on any plan, with
+    # nothing for the operator to remember.
     # Render pings this to decide the service is live. It runs `select 1`, so it
     # doubles as database activity — which is why an UptimeRobot monitor pointed
     # at this path both defeats the 15-minute idle spin-down and keeps a free
