@@ -20,6 +20,7 @@ import type {
   AccountActivity,
   AppSettings,
   AuthSession,
+  BackupPayload,
   BatchScanResult,
   BatchTestResult,
   BulkCreateAccountsBody,
@@ -46,6 +47,7 @@ import type {
   LoginBody,
   MatchedMessage,
   MessageDetail,
+  RestoreBackupResult,
   ScanAllAccountsParams,
   ScanResult,
   SelectedIdsResult,
@@ -2813,6 +2815,169 @@ export const useTestTelegram = <
   TContext
 > => {
   return useMutation(getTestTelegramMutationOptions(options));
+};
+
+/**
+ * The complete archive — settings, accounts, and every stored message with its full body — as a single JSON document. Streamed in batches, so the size is limited by disk and download time, not by instance memory. The file contains credentials (mailbox passwords, the Telegram bot token): keep it private.
+ * @summary Download every table of the database as one JSON file
+ */
+export const getDownloadBackupUrl = () => {
+  return `/api/backup`;
+};
+
+export const downloadBackup = async (
+  options?: RequestInit,
+): Promise<BackupPayload> => {
+  return customFetch<BackupPayload>(getDownloadBackupUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getDownloadBackupQueryKey = () => {
+  return [`/api/backup`] as const;
+};
+
+export const getDownloadBackupQueryOptions = <
+  TData = Awaited<ReturnType<typeof downloadBackup>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof downloadBackup>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getDownloadBackupQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof downloadBackup>>> = ({
+    signal,
+  }) => downloadBackup({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof downloadBackup>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type DownloadBackupQueryResult = NonNullable<
+  Awaited<ReturnType<typeof downloadBackup>>
+>;
+export type DownloadBackupQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Download every table of the database as one JSON file
+ */
+
+export function useDownloadBackup<
+  TData = Awaited<ReturnType<typeof downloadBackup>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof downloadBackup>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getDownloadBackupQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Merge-only: rows already present are skipped and nothing is deleted or overwritten, so it is safe to run repeatedly and safe on a live database. Ids are preserved and sequences advanced, so restored rows keep their relationships. Accepts a document produced by `GET /backup`.
+ * @summary Restore missing rows from a backup file
+ */
+export const getRestoreBackupUrl = () => {
+  return `/api/backup/restore`;
+};
+
+export const restoreBackup = async (
+  backupPayload: BackupPayload,
+  options?: RequestInit,
+): Promise<RestoreBackupResult> => {
+  return customFetch<RestoreBackupResult>(getRestoreBackupUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(backupPayload),
+  });
+};
+
+export const getRestoreBackupMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof restoreBackup>>,
+    TError,
+    { data: BodyType<BackupPayload> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof restoreBackup>>,
+  TError,
+  { data: BodyType<BackupPayload> },
+  TContext
+> => {
+  const mutationKey = ["restoreBackup"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof restoreBackup>>,
+    { data: BodyType<BackupPayload> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return restoreBackup(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RestoreBackupMutationResult = NonNullable<
+  Awaited<ReturnType<typeof restoreBackup>>
+>;
+export type RestoreBackupMutationBody = BodyType<BackupPayload>;
+export type RestoreBackupMutationError = ErrorType<void>;
+
+/**
+ * @summary Restore missing rows from a backup file
+ */
+export const useRestoreBackup = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof restoreBackup>>,
+    TError,
+    { data: BodyType<BackupPayload> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof restoreBackup>>,
+  TError,
+  { data: BodyType<BackupPayload> },
+  TContext
+> => {
+  return useMutation(getRestoreBackupMutationOptions(options));
 };
 
 /**

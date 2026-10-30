@@ -239,6 +239,14 @@ See `.env.example` for the Supabase connection-string format.
   is write-only — omitted means keep, empty string means clear), and retention
 - `POST /settings/telegram-test` — deliver one real Telegram message with the
   stored configuration, so setup errors surface during setup
+- `GET /backup` — the whole database as one downloadable JSON file (settings,
+  accounts, every message with its full body). Streamed in batches, so archive
+  size does not hit instance memory. Contains credentials; keep it private
+- `POST /backup/restore` — merge-only restore of a backup file: missing rows are
+  inserted, existing ones skipped, nothing deleted or overwritten, ids preserved
+  and sequences advanced. Safe to repeat and safe on a live database. 64 MB
+  body cap (its own JSON parser); larger archives restore through the database
+  provider's tools
 - `GET /view/:token` — one stored message by signed, expiring link (public;
   the token is the credential and grants exactly that message)
 - `GET /stats/summary` `/stats/keyword-breakdown` `/stats/account-activity`

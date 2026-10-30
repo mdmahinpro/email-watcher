@@ -375,6 +375,42 @@ export interface BulkDeleteResult {
   notFound: number[];
 }
 
+export type BackupPayloadTablesItem = { [key: string]: unknown };
+
+/**
+ * Rows keyed by table name: app_settings, email_accounts, matched_messages, inbox_messages. Each row carries its original id.
+ */
+export type BackupPayloadTables = { [key: string]: BackupPayloadTablesItem[] };
+
+/**
+ * Row count per table, for a quick sanity check.
+ */
+export type BackupPayloadCounts = { [key: string]: number };
+
+/**
+ * One JSON document holding every row of every table.
+ */
+export interface BackupPayload {
+  /** Payload shape version; restore refuses anything else. */
+  version: number;
+  exportedAt?: string;
+  /** Rows keyed by table name: app_settings, email_accounts, matched_messages, inbox_messages. Each row carries its original id. */
+  tables: BackupPayloadTables;
+  /** Row count per table, for a quick sanity check. */
+  counts?: BackupPayloadCounts;
+}
+
+/**
+ * Rows inserted per table. Existing rows are skipped.
+ */
+export type RestoreBackupResultRestored = { [key: string]: number };
+
+export interface RestoreBackupResult {
+  /** Rows inserted per table. Existing rows are skipped. */
+  restored: RestoreBackupResultRestored;
+  message: string;
+}
+
 export interface DeleteMessagesBulkBody {
   /**
    * @minItems 1

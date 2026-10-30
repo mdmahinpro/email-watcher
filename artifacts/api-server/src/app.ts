@@ -139,6 +139,16 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 app.use(cookieParser());
+/**
+ * A restore upload carries the whole archive, so the 1 MB global limit would
+ * reject every real backup. This parser covers only the restore path and is
+ * mounted first; the global parser below then finds the body already parsed.
+ *
+ * 64 MB is deliberate: the parsed document typically needs several times its
+ * size in memory, and a free instance has 512 MB. Bigger archives should be
+ * restored through the database provider's own tools.
+ */
+app.use("/api/backup/restore", express.json({ limit: "64mb" }));
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 

@@ -1,9 +1,12 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   useGetSettings,
   getGetSettingsQueryKey,
   useUpdateSettings,
   useTestTelegram,
+  useDownloadBackup,
+  getDownloadBackupQueryKey,
+  useRestoreBackup,
 } from "@workspace/api-client-react";
 import {
   Save,
@@ -17,6 +20,9 @@ import {
   Bell,
   Send,
   Globe,
+  DatabaseBackup,
+  Download,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +39,17 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { Separator } from "@/components/ui/separator";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 /** Mirrors `pollIntervalSeconds` minimum in the API spec and the server clamp. */
 const MIN_POLL_SECONDS = 30;
@@ -85,8 +102,7 @@ export default function Settings() {
 
   // Sends one real message with the STORED settings, so it verifies exactly
   // what a scan would use — which is why the hint says to save first.
-  const testTelegram = useTestTelegram({
-    mutation: {
+  const testTelegram = useTestTelegram({    mutation: {
       onSuccess: (result) => {
         if (result.ok) {
           toast({ title: "Telegram test sent", description: result.message });
@@ -107,6 +123,108 @@ export default function Settings() {
       },
     },
   });
+
+  // Whole-database backup and restore. The backup is downloaded as a JSON file;
+  // the restore reads such a file and only adds what is missing, so it is safe
+  // to run more than once and cannot overwrite live data.
+  const backupRef = useRef<HTMLInputElement>(null);
+  const [restoreFileName, setRestoreFileName] = useState<string | null>(null);
+  const [restorePayload, setRestorePayload] = useState<unknown>(null);
+
+  // A GET, so it is a query, not a mutation: fetched only when the button is
+  // pressed, never on mount (a backup can be large).
+  const backupQuery = useDownloadBackup({
+    query: {
+      queryKey: getDownloadBackupQueryKey(),
+      enabled: false,
+      gcTime: 0,
+    },
+  });
+
+  const downloadBackup = async () => {
+    try {
+      const result = await backupQuery.refetch();
+      if (result.error || !result.data) {
+        toast({
+          title: "Backup failed",
+          description:
+            result.error instanceof Error
+              ? result.error.message
+              : "The server did not return a backup.",
+          variant: "destructive",
+        });
+        return;
+      }
+      const data = result.data;
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `email-watcher-backup-${new Date()
+        .toISOString()
+        .replace(/[:.]/g, "-")}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      const counts = (data as { counts?: Record<string, number> }).counts;
+      const total = counts
+        ? Object.values(counts).reduce((a, b) => a + b, 0)
+        : undefined;
+      toast({
+        title: "Backup downloaded",
+        description:
+          total !== undefined
+            ? `${total} rows. Keep this file private — it holds mailbox passwords.`
+            : "Keep this file private — it holds mailbox passwords.",
+      });
+    } catch (err) {
+      toast({
+        title: "Backup failed",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const restoreBackup = useRestoreBackup({
+    mutation: {
+      onSuccess: (data) => {
+        toast({
+          title: "Restore finished",
+          description: data.message,
+        });
+        setRestoreFileName(null);
+        setRestorePayload(null);
+        if (backupRef.current) backupRef.current.value = "";
+        queryClient.invalidateQueries();
+      },
+      onError: (err) => {
+        toast({
+          title: "Restore failed",
+          description: err.message,
+          variant: "destructive",
+        });
+      },
+    },
+  });
+
+  const handleBackupFile = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const parsed: unknown = JSON.parse(await file.text());
+      setRestorePayload(parsed);
+      setRestoreFileName(file.name);
+    } catch {
+      setRestorePayload(null);
+      setRestoreFileName(null);
+      toast({
+        title: "Not a backup file",
+        description: "That file is not valid JSON.",
+        variant: "destructive",
+      });
+    }
+  };
 
   const [localKeywords, setLocalKeywords] = useState<string[]>([]);
   const [newKeyword, setNewKeyword] = useState("");
@@ -743,6 +861,111 @@ export default function Settings() {
                 </p>
               </div>
             ) : null}
+          </div>
+        </div>
+
+        {/* Backup & Restore Card */}
+        <div className="pin-card">
+          <div className="p-4 pb-3 sm:p-6 sm:pb-4">
+            <div className="mb-1 flex items-center gap-2.5">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary/10">
+                <DatabaseBackup className="h-4 w-4 text-sidebar-primary" />
+              </div>
+              <h3 className="font-semibold text-foreground">Backup &amp; Restore</h3>
+            </div>
+            <p className="text-xs text-muted-foreground sm:ml-[42px]">
+              Your data lives in the managed Postgres database behind
+              DATABASE_URL, not on this server. Download a full copy any time —
+              settings, accounts, and every stored message with its body.
+            </p>
+          </div>
+          <div className="space-y-5 px-4 pb-4 sm:px-6 sm:pb-6">
+            <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-black/30 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+              <div className="min-w-0 space-y-0.5">
+                <Label className="text-sm font-semibold">Download a full backup</Label>
+                <p className="text-xs text-muted-foreground">
+                  One JSON file with everything. It contains mailbox passwords,
+                  so store it somewhere private.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                className="w-full shrink-0 rounded-full sm:w-auto"
+                disabled={backupQuery.isFetching}
+                onClick={() => void downloadBackup()}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                {backupQuery.isFetching ? "Preparing..." : "Download backup"}
+              </Button>
+            </div>
+
+            <Separator className="bg-white/10" />
+
+            <div className="space-y-2">
+              <Label htmlFor="restoreFile" className="pin-meta-label">
+                Restore from a backup file
+              </Label>
+              <Input
+                id="restoreFile"
+                ref={backupRef}
+                type="file"
+                accept="application/json,.json"
+                onChange={(e) => void handleBackupFile(e.target.files?.[0])}
+                className="pin-input file:mr-3 file:rounded-full file:border-0 file:bg-sidebar-accent/70 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-sidebar-accent-foreground"
+              />
+              {restoreFileName ? (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      variant="secondary"
+                      className="w-full rounded-full sm:w-auto"
+                      disabled={restoreBackup.isPending}
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      {restoreBackup.isPending
+                        ? "Restoring..."
+                        : `Restore ${restoreFileName}`}
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle className="font-bold">
+                        Restore from {restoreFileName}?
+                      </AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Missing rows are added and existing ones are left as
+                        they are — nothing is deleted or overwritten, so this is
+                        safe to run more than once. Use it after a fresh
+                        deployment to recover everything, or to regain messages
+                        that were lost.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel className="rounded-full">
+                        Cancel
+                      </AlertDialogCancel>
+                      <AlertDialogAction
+                        className="rounded-full"
+                        onClick={() =>
+                          restoreBackup.mutate({
+                            data: restorePayload as never,
+                          })
+                        }
+                      >
+                        Restore now
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Choose a file downloaded above. Rows already present are
+                  skipped, so restoring an older backup cannot remove newer
+                  mail. Files up to 64 MB; for larger archives use your
+                  database provider's own backup tools.
+                </p>
+              )}
+            </div>
           </div>
         </div>
 

@@ -1246,6 +1246,57 @@ export const TestTelegramResponse = zod.object({
 });
 
 /**
+ * The complete archive — settings, accounts, and every stored message with its full body — as a single JSON document. Streamed in batches, so the size is limited by disk and download time, not by instance memory. The file contains credentials (mailbox passwords, the Telegram bot token): keep it private.
+ * @summary Download every table of the database as one JSON file
+ */
+export const DownloadBackupResponse = zod
+  .object({
+    version: zod
+      .number()
+      .describe("Payload shape version; restore refuses anything else."),
+    exportedAt: zod.string().optional(),
+    tables: zod
+      .record(zod.string(), zod.array(zod.record(zod.string(), zod.unknown())))
+      .describe(
+        "Rows keyed by table name: app_settings, email_accounts, matched_messages, inbox_messages. Each row carries its original id.",
+      ),
+    counts: zod
+      .record(zod.string(), zod.number())
+      .optional()
+      .describe("Row count per table, for a quick sanity check."),
+  })
+  .describe("One JSON document holding every row of every table.");
+
+/**
+ * Merge-only: rows already present are skipped and nothing is deleted or overwritten, so it is safe to run repeatedly and safe on a live database. Ids are preserved and sequences advanced, so restored rows keep their relationships. Accepts a document produced by `GET /backup`.
+ * @summary Restore missing rows from a backup file
+ */
+export const RestoreBackupBody = zod
+  .object({
+    version: zod
+      .number()
+      .describe("Payload shape version; restore refuses anything else."),
+    exportedAt: zod.string().optional(),
+    tables: zod
+      .record(zod.string(), zod.array(zod.record(zod.string(), zod.unknown())))
+      .describe(
+        "Rows keyed by table name: app_settings, email_accounts, matched_messages, inbox_messages. Each row carries its original id.",
+      ),
+    counts: zod
+      .record(zod.string(), zod.number())
+      .optional()
+      .describe("Row count per table, for a quick sanity check."),
+  })
+  .describe("One JSON document holding every row of every table.");
+
+export const RestoreBackupResponse = zod.object({
+  restored: zod
+    .record(zod.string(), zod.number())
+    .describe("Rows inserted per table. Existing rows are skipped."),
+  message: zod.string(),
+});
+
+/**
  * Telegram alerts carry a link here so a critical match can be opened without a session. The token is an HMAC over the message id and an expiry, signed with the app's session key material: it cannot be forged or enumerated, it expires on its own (30 days), and changing the app password invalidates it. It grants exactly one message and nothing else.
  * @summary One stored message by signed, expiring link
  */

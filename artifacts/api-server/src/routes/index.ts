@@ -7,6 +7,7 @@ import inboxRouter from "./inbox";
 import settingsRouter from "./settings";
 import statsRouter from "./stats";
 import viewRouter from "./view";
+import backupRouter from "./backup";
 import { requireAuth } from "../middlewares/require-auth";
 
 const router: IRouter = Router();
@@ -23,6 +24,7 @@ router.use(messagesRouter);
 router.use(inboxRouter);
 router.use(settingsRouter);
 router.use(statsRouter);
+router.use(backupRouter);
 router.use(viewRouter);
 
 // Unmatched /api/* paths are API errors, so answer with JSON instead of falling
