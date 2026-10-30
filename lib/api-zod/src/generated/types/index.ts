@@ -43,7 +43,6 @@ export * from "./listMessagesParams";
 export * from "./loginBody";
 export * from "./matchedMessage";
 export * from "./messageDetail";
-export * from "./recheckArchiveResult";
 export * from "./scanAllAccountsParams";
 export * from "./scanResult";
 export * from "./selectedIdsResult";

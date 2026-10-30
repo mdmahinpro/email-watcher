@@ -1,9 +1,8 @@
 import { Router, type IRouter } from "express";
-import { and, asc, desc, eq, gt, gte, ilike, inArray, lte, or } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, inArray, lte, or } from "drizzle-orm";
 import {
   db,
   matchedMessagesTable,
-  inboxMessagesTable,
   emailAccountsTable,
 } from "@workspace/db";
 import {
@@ -15,8 +14,6 @@ import {
   ListMessageIdsBody,
 } from "@workspace/api-zod";
 import { serializeDetail } from "../lib/message-detail";
-import { buildKeywordHaystack, findKeywordMatches } from "../lib/scan-planner";
-import { getSettings } from "../lib/settings";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -29,9 +26,6 @@ const router: IRouter = Router();
  * truncated flag in the response headers says when it was hit.
  */
 const EXPORT_MAX_ROWS = 2000;
-
-/** Batch size for the archive re-check pass. */
-const RECHECK_BATCH_ROWS = 500;
 
 interface MessageFilters {
   accountId?: number;
@@ -396,93 +390,6 @@ router.post("/messages/delete-bulk", async (req, res) => {
   );
 
   res.json({ deleted, notFound });
-});
-
-/**
- * Re-run keyword matching over the unfiltered archive.
- *
- * The archive (`inbox_messages`) holds every message from `all`-capture
- * mailboxes. When keywords change — or when a message was captured by the old
- * matcher, which missed keywords hidden in HTML entities and link targets —
- * this pass re-tests every archived message with the current keywords and
- * surfaces the hits in the Messages queue. Rows already matched are left
- * alone (the insert is a no-op on conflict), so it is safe to run repeatedly.
- *
- * Matched rows found here are never forwarded: forwarding is a live-scan
- * behaviour over a keyword-triage mailbox, and replaying archived mail would
- * send duplicates of anything already relayed.
- */
-router.post("/messages/recheck-archive", async (_req, res) => {
-  const settings = await getSettings();
-  const keywords = settings.keywords ?? [];
-
-  let scanned = 0;
-  let inserted = 0;
-  let lastId = 0;
-
-  for (;;) {
-    const rows = await db
-      .select()
-      .from(inboxMessagesTable)
-      .where(gt(inboxMessagesTable.id, lastId))
-      .orderBy(asc(inboxMessagesTable.id))
-      .limit(RECHECK_BATCH_ROWS);
-    if (rows.length === 0) break;
-    lastId = rows[rows.length - 1]!.id;
-
-    for (const row of rows) {
-      scanned++;
-      const hits = findKeywordMatches(
-        buildKeywordHaystack({
-          subject: row.subject,
-          from: row.fromAddress,
-          to: row.toAddress,
-          text: row.bodyText ?? "",
-          html: row.bodyHtml ?? "",
-        }),
-        keywords,
-      );
-      if (hits.length === 0) continue;
-
-      const result = await db
-        .insert(matchedMessagesTable)
-        .values({
-          accountId: row.accountId,
-          accountLabelSnapshot: row.accountLabelSnapshot,
-          accountEmailSnapshot: row.accountEmailSnapshot,
-          messageUid: row.messageUid,
-          folder: row.folder,
-          messageId: row.messageId,
-          fromAddress: row.fromAddress,
-          toAddress: row.toAddress,
-          subject: row.subject,
-          snippet: row.snippet,
-          bodyText: row.bodyText,
-          bodyHtml: row.bodyHtml,
-          bodyTruncated: row.bodyTruncated,
-          receivedAt: row.receivedAt,
-          matchedKeywords: hits,
-          forwarded: false,
-          forwardError: null,
-        })
-        .onConflictDoNothing()
-        .returning({ id: matchedMessagesTable.id });
-      if (result[0]?.id !== undefined) inserted++;
-    }
-  }
-
-  logger.info(
-    { scanned, inserted, keywords: keywords.length },
-    "Archive keyword re-check complete",
-  );
-
-  res.json({
-    scanned,
-    inserted,
-    message:
-      `Re-checked ${scanned} archived messages with the current keywords; ` +
-      `${inserted} new match${inserted === 1 ? "" : "es"} surfaced in Messages.`,
-  });
 });
 
 export default router;

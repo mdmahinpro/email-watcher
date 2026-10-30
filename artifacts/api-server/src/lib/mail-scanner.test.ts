@@ -325,13 +325,14 @@ describe("captureMode: all", () => {
       "Weekly newsletter",
       "Lunch?",
     ]);
-    // Keywords run in every capture mode: the invoice hit is surfaced in the
-    // triage queue as well as the archive.
-    expect(result.matched).toBe(1);
-    expect(dbMock.insertsInto("matched_messages")).toHaveLength(1);
+    // The archive mailbox never writes into the triage queue: the Messages
+    // tab is the webmail view, and an `all` mailbox's listing is the Hostinger
+    // Inbox tab. Even a keyword hit (the invoice) stays out of it.
+    expect(result.matched).toBe(0);
+    expect(dbMock.insertsInto("matched_messages")).toHaveLength(0);
   });
 
-  it("marks keyword hits in the queue without forwarding them", async () => {
+  it("puts nothing in the triage queue, even for a keyword hit", async () => {
     await scanAccount(account({ captureMode: "all" }));
 
     const archived = dbMock.insertsInto("inbox_messages");
@@ -342,12 +343,7 @@ describe("captureMode: all", () => {
     // Archive rows carry no keyword or forwarding columns at all.
     expect(invoiceRow).not.toHaveProperty("matchedKeywords");
     expect(invoiceRow).not.toHaveProperty("forwarded");
-
-    const matched = dbMock.insertsInto("matched_messages");
-    expect(matched).toHaveLength(1);
-    expect(matched[0]!["subject"]).toBe("Your invoice is ready");
-    expect(matched[0]!["matchedKeywords"]).toEqual(["invoice"]);
-    expect(matched[0]!["forwarded"]).toBe(false);
+    expect(dbMock.insertsInto("matched_messages")).toHaveLength(0);
   });
 
   it("never forwards", async () => {
@@ -669,7 +665,7 @@ describe("critical keywords and Telegram", () => {
 
     expect(telegramMock.sendCriticalNotice).toHaveBeenCalledTimes(1);
     const [call] = telegramMock.sendCriticalNotice.mock.calls;
-    const notice = call?.[1] as CriticalNotice;
+    const notice = call?.[1] as CriticalNotice & { kind: string };
     const viewUrl = call?.[2] as string | null;
     expect(notice.criticalHits).toEqual(["urgent"]);
     expect(notice.subject).toBe("Urgent invoice needed");
@@ -678,7 +674,7 @@ describe("critical keywords and Telegram", () => {
     expect(viewUrl).toMatch(/^https:\/\/watcher\.example\.com\/view\/v1\.matched\.1\./);
   });
 
-  it("lists a critical match from an `all` mailbox without forwarding it", async () => {
+  it("pushes a critical hit from an `all` mailbox but lists nothing", async () => {
     settingsMock.getSettings.mockResolvedValueOnce(telegramSettings);
     imapMock.state.folders = [{ path: "INBOX", messages: [
       { uid: 1, subject: "Urgent reward claim", from: "promo@x.com", body: "go" },
@@ -687,13 +683,24 @@ describe("critical keywords and Telegram", () => {
 
     const result = await scanAccount(account({ captureMode: "all" }));
 
-    // Archived everything, listed the one critical hit, pushed it, forwarded
-    // nothing — the loop-prevention rule stands even for critical mail.
+    // Archived everything, pushed the one critical hit, listed nothing in the
+    // triage queue, forwarded nothing — the webmail/archive separation holds
+    // even for critical mail.
     expect(result.archived).toBe(2);
-    expect(result.matched).toBe(1);
+    expect(result.matched).toBe(0);
     expect(result.notified).toBe(1);
     expect(result.forwarded).toBe(0);
     expect(sendMail).not.toHaveBeenCalled();
+    expect(dbMock.insertsInto("matched_messages")).toHaveLength(0);
+
+    // The notice links to the archived row's web view — an `all` mailbox has
+    // no triage row to link to.
+    const [call] = telegramMock.sendCriticalNotice.mock.calls;
+    const notice = call?.[1] as CriticalNotice & { kind: string; rowId: number };
+    const viewUrl = call?.[2] as string | null;
+    expect(notice.kind).toBe("inbox");
+    expect(notice.criticalHits).toEqual(["urgent"]);
+    expect(viewUrl).toMatch(/^https:\/\/watcher\.example\.com\/view\/v1\.inbox\.1\./);
   });
 
   it("does not push when only a regular keyword hits", async () => {

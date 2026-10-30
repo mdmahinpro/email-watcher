@@ -36,13 +36,29 @@ const ENSURE_STATEMENTS: string[] = [
 ];
 
 /**
+ * One-time data fixups for invariants that shipped after some rows were
+ * written by an older behaviour. Idempotent like the statements above.
+ */
+const FIXUP_STATEMENTS: string[] = [
+  // Archiving mailboxes (capture_mode "all") must not contribute rows to the
+  // keyword triage queue — that queue is the webmail Messages tab, and an
+  // archive mailbox's listing is the Hostinger Inbox tab. Rows written by the
+  // earlier "keywords run everywhere" behaviour are exact duplicates of their
+  // archive rows (never forwarded, never edited), so removing them loses no
+  // mail: every message remains in the archive tab. After this runs once
+  // there are no such rows, and the scanner no longer creates them.
+  `DELETE FROM "matched_messages" AS mm USING "email_accounts" AS ea ` +
+    `WHERE mm."account_id" = ea."id" AND ea."capture_mode" = 'all'`,
+];
+
+/**
  * Apply any missing statements. Throws on failure so the process exits and the
  * host restarts it: a server that cannot query its own tables must not take
  * traffic, and a restart loop is a louder, more honest signal than a running
  * instance answering 500 to everything.
  */
 export async function ensureSchema(): Promise<void> {
-  for (const statement of ENSURE_STATEMENTS) {
+  for (const statement of [...ENSURE_STATEMENTS, ...FIXUP_STATEMENTS]) {
     try {
       await db.execute(statement);
       logger.debug({ statement }, "Schema ensured");
@@ -52,7 +68,10 @@ export async function ensureSchema(): Promise<void> {
     }
   }
   logger.info(
-    { statements: ENSURE_STATEMENTS.length },
+    {
+      statements: ENSURE_STATEMENTS.length,
+      fixups: FIXUP_STATEMENTS.length,
+    },
     "Schema ensured (additive, idempotent)",
   );
 }

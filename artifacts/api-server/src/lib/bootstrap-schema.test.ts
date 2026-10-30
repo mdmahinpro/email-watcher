@@ -29,9 +29,10 @@ describe("ensureSchema", () => {
   it("runs one idempotent statement per additive column", async () => {
     await ensureSchema();
 
-    expect(dbMock.execute).toHaveBeenCalledTimes(8);
+    // Eight column statements, then the one data fixup.
+    expect(dbMock.execute).toHaveBeenCalledTimes(9);
     const statements = dbMock.execute.mock.calls.map((c) => String(c[0]));
-    for (const statement of statements) {
+    for (const statement of statements.slice(0, 8)) {
       // Nothing here may ever drop or rewrite: a boot must not lose data.
       expect(statement).toMatch(/ADD COLUMN IF NOT EXISTS/);
       expect(statement).not.toMatch(/DROP|RENAME|ALTER COLUMN|TRUNCATE/i);
@@ -61,6 +62,20 @@ describe("ensureSchema", () => {
     // Existing rows predate the column; they were all read from INBOX at the
     // time, so the default must say so rather than failing the constraint.
     expect(folderStatement).toContain(`NOT NULL DEFAULT 'INBOX'`);
+  });
+
+  it("removes triage rows written by archive mailboxes, and only those", async () => {
+    await ensureSchema();
+
+    const fixup = dbMock.execute.mock.calls
+      .map((c) => String(c[0]))
+      .find((s) => s.startsWith("DELETE FROM"));
+    // The Messages queue belongs to webmail triage only; rows written by the
+    // earlier "keywords run everywhere" behaviour are exact duplicates of
+    // their archive rows, so removing them keeps every message.
+    expect(fixup).toContain('DELETE FROM "matched_messages"');
+    expect(fixup).toContain('"capture_mode" = \'all\'');
+    expect(fixup).not.toMatch(/DROP|TRUNCATE|UPDATE/i);
   });
 
   it("throws on failure so the process exits instead of serving 500s", async () => {

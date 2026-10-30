@@ -10,7 +10,6 @@ import {
   useExportMessages,
   useDeleteMessagesBulk,
   useListMessageIds,
-  useRecheckArchiveForMatches,
   getGetStatsSummaryQueryKey,
   getGetKeywordBreakdownQueryKey,
   getGetAccountActivityQueryKey,
@@ -25,7 +24,6 @@ import {
   ChevronRight,
   Download,
   Search,
-  SearchCheck,
   Trash2,
   X,
 } from "lucide-react";
@@ -217,25 +215,6 @@ export default function Messages() {
     },
   });
 
-  const recheckArchive = useRecheckArchiveForMatches({
-    mutation: {
-      onSuccess: (data) => {
-        toast({
-          title: `${data.inserted} new match${data.inserted === 1 ? "" : "es"} found`,
-          description: data.message,
-        });
-        invalidateMessageViews();
-      },
-      onError: (err) => {
-        toast({
-          title: "Re-check failed",
-          description: err.message,
-          variant: "destructive",
-        });
-      },
-    },
-  });
-
   // "Select all matching": fetches the id of every message matching the
   // current search and account filter in one request, so a selection can span
   // pages the user has never visited.
@@ -329,27 +308,15 @@ export default function Messages() {
         <div className="min-w-0">
           <h1 className="pin-section-title">Messages</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            Emails that matched your keywords, across every account and folder.
-            Unfiltered Hostinger mail is under{" "}
+            Emails that matched your keywords in your webmail accounts.
+            Hostinger mail lives in{" "}
             <Link href="/inbox" className="text-sidebar-primary hover:underline">
               Hostinger Inbox
-            </Link>
-            .
+            </Link>{" "}
+            only.
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <Button
-            variant="outline"
-            className="w-full rounded-full sm:w-auto"
-            disabled={recheckArchive.isPending}
-            title="Re-test every archived message with the current keywords and surface the hits here. Recovers matches missed before a keyword was added or by the older matcher."
-            onClick={() => recheckArchive.mutate()}
-          >
-            <SearchCheck
-              className={`mr-2 h-4 w-4 ${recheckArchive.isPending ? "animate-pulse" : ""}`}
-            />
-            {recheckArchive.isPending ? "Re-checking..." : "Re-check Archive"}
-          </Button>
           <Select value={selectedAccountId} onValueChange={onFilterChange}>
             {/* Full width on mobile so the control is easy to hit. */}
             <SelectTrigger className="w-full rounded-xl sm:w-[220px]">

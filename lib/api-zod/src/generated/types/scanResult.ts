@@ -8,7 +8,7 @@
 
 export interface ScanResult {
   scanned: number;
-  /** Keyword matches stored, in either capture mode. Forwarded ones came from a `keywords` mailbox. */
+  /** Keyword matches stored into the Messages queue, which only a `keywords` mailbox writes. An `all` mailbox archives instead and reports 0 here. */
   matched: number;
   /** Messages archived, for an `all` mailbox. */
   archived: number;

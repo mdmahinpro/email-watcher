@@ -447,9 +447,14 @@ export async function scanAccount(
 /**
  * A stored match that still needs a Telegram push. Sent after the IMAP
  * connection is released, so a slow Telegram API cannot hold the mailbox open.
+ *
+ * `kind` picks which row the web-view button opens: the triage row for a
+ * keywords mailbox, the archived row for an `all` mailbox (which stores
+ * nothing in the triage queue, so its archive row is the only web view).
  */
 interface PendingNotice extends CriticalNotice {
   rowId: number;
+  kind: "matched" | "inbox";
 }
 
 /**
@@ -480,7 +485,7 @@ async function sendPendingNotices(
         ? `${base}/view/${createViewToken(
             authState.config.sessionSecret,
             authState.config.passwordHash,
-            "matched",
+            notice.kind,
             notice.rowId,
           )}`
         : null;
@@ -517,10 +522,10 @@ async function runScan(account: EmailAccount): Promise<ScanOutcome> {
   const forwardingActive =
     !archiveEverything && settings.forwardingEnabled && forwardTo.length > 0;
 
-  // Keywords run in every capture mode — critical ones are additionally
-  // pushed to Telegram when it is configured.
-  const runKeywords = keywords.length > 0 || criticalKeywords.length > 0;
-
+  // Keywords run per capture mode: a `keywords` mailbox runs the full union of
+  // regular and critical lists (its matches are the Messages queue), an `all`
+  // mailbox runs only the critical list and only to decide whether to push
+  // Telegram — its listing is the archive tab.
   const client = createImapClient(account);
 
   let scanned = 0;
@@ -634,8 +639,15 @@ async function runScan(account: EmailAccount): Promise<ScanOutcome> {
             bodyTruncated: storedText.truncated || storedHtml.truncated,
             receivedAt,
           };
-
-          const haystack = runKeywords
+          // The two capture modes want very different things from keywords:
+          // a `keywords` mailbox runs the full union of regular and critical
+          // lists for its triage row; an `all` mailbox runs the critical list
+          // only, and only to decide whether to push Telegram — its listing
+          // is the archive tab, and putting its matches into the Messages
+          // queue would mix the two views.
+          const needsHaystack =
+            !archiveEverything || criticalKeywords.length > 0;
+          const haystack = needsHaystack
             ? buildKeywordHaystack({
                 subject,
                 from: fromAddress,
@@ -644,24 +656,17 @@ async function runScan(account: EmailAccount): Promise<ScanOutcome> {
                 html,
               })
             : "";
-          const regularHits =
-            keywords.length > 0
-              ? findKeywordMatches(haystack, keywords)
-              : [];
           const criticalHits =
             criticalKeywords.length > 0
               ? findKeywordMatches(haystack, criticalKeywords)
               : [];
-          // A critical keyword is also a keyword: its match is listed like any
-          // other, deduplicated in its configured spelling.
-          const hits = [...regularHits];
-          for (const hit of criticalHits) {
-            if (!hits.includes(hit)) hits.push(hit);
-          }
 
           if (archiveEverything) {
+            let archiveRowId: number | undefined;
             try {
-              await db
+              // The row id is kept: a critical Telegram notice links to this
+              // row's web view, since an `all` mailbox stores no triage row.
+              const inserted = await db
                 .insert(inboxMessagesTable)
                 .values(common)
                 // A rescan re-reads messages that are already stored (for example
@@ -680,7 +685,9 @@ async function runScan(account: EmailAccount): Promise<ScanOutcome> {
                     bodyHtml: sql`coalesce(${inboxMessagesTable.bodyHtml}, excluded.body_html)`,
                     bodyTruncated: sql`${inboxMessagesTable.bodyTruncated} or excluded.body_truncated`,
                   },
-                });
+                })
+                .returning({ id: inboxMessagesTable.id });
+              archiveRowId = inserted[0]?.id;
               archived++;
             } catch (err) {
               logger.error(
@@ -690,6 +697,42 @@ async function runScan(account: EmailAccount): Promise<ScanOutcome> {
               // Not persisted, so do not advance past it.
               break;
             }
+
+            if (
+              telegramPush &&
+              criticalHits.length > 0 &&
+              archiveRowId !== undefined
+            ) {
+              pendingNotices.push({
+                rowId: archiveRowId,
+                kind: "inbox",
+                subject,
+                fromAddress,
+                toAddress: String(toAddress),
+                accountLabel: account.label,
+                accountEmail: account.emailAddress,
+                folder,
+                receivedAt,
+                criticalHits,
+                bodyText: text,
+                bodyHtml: html,
+              });
+            }
+
+            if (uid > highestUid) highestUid = uid;
+            await commitProgress(account.id, folder, highestUid);
+            continue;
+          }
+
+          // A critical keyword is also a keyword in a triage mailbox: its
+          // match is listed like any other, deduplicated in its spelling.
+          const regularHits =
+            keywords.length > 0
+              ? findKeywordMatches(haystack, keywords)
+              : [];
+          const hits = [...regularHits];
+          for (const hit of criticalHits) {
+            if (!hits.includes(hit)) hits.push(hit);
           }
 
           if (hits.length > 0) {
@@ -742,8 +785,7 @@ async function runScan(account: EmailAccount): Promise<ScanOutcome> {
             }
 
             // No id means the row already existed, so it was handled by a previous
-            // scan and must not be forwarded again. An `all` mailbox never
-            // forwards: relaying every arriving email invites a mail loop.
+            // scan and must not be forwarded again.
             if (forwardingActive && insertedId !== undefined) {
               pending.push({
                 rowId: insertedId,
@@ -767,6 +809,7 @@ async function runScan(account: EmailAccount): Promise<ScanOutcome> {
             ) {
               pendingNotices.push({
                 rowId: insertedId,
+                kind: "matched",
                 subject,
                 fromAddress,
                 toAddress: String(toAddress),

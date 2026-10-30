@@ -70,11 +70,12 @@ Two keyword lists, two behaviours:
   across as many 4096-character messages as it takes — plus an inline
   "Open in Email Watcher" button to the exact web view of that message.
 
-Critical matching runs in every capture mode, so a Hostinger mailbox archived
+Critical matching runs against every mailbox, so a Hostinger mailbox archived
 in full still alerts when something critical lands in it (or in its junk
-folder). Pushes are sent only for newly stored rows, so a rescan cannot spam
-the same match twice, and a Telegram failure never fails the scan — the match
-is already stored, the push just retries with the next one.
+folder) — the alert is a notification, not a listing, so the Messages queue
+stays webmail-only. Pushes are sent only for newly stored rows, so a rescan
+cannot spam the same match twice, and a Telegram failure never fails the scan
+— the match is already stored, the push just retries with the next one.
 
 Setup lives in Settings: the bot token (from @BotFather, stored once and never
 echoed back — `telegramBotTokenSet` reports presence), the chat id (from
@@ -92,20 +93,24 @@ message viewer; see `lib/auth.ts` (`createViewToken`) and `routes/view.ts`.
 
 A scan reads each account's `capture_mode`:
 
-- `keywords` (default for the Accounts page): subject, sender, recipient,
-  and body are tested against the configured keywords. Matches go to
-  `matched_messages` and are forwarded if forwarding is on. Non-matches are
-  discarded.
+- `keywords` (default for the Accounts page, the webmail mailboxes): subject,
+  sender, recipient, and body are tested against the configured keywords.
+  Matches go to `matched_messages` — the Messages tab — and are forwarded if
+  forwarding is on. Non-matches are discarded.
 - `all` (default for the Hostinger page): every message is archived to
-  `inbox_messages`, **and** the keyword test still runs — a hit is also
-  surfaced in `matched_messages`, so no keyword match is lost just because
-  the mailbox archives everything. Forwarding is skipped for matches found
-  in an `all` mailbox: relaying every arriving email would invite a mail loop.
+  `inbox_messages` — the Hostinger Inbox tab — and **nothing is ever written
+  to the Messages queue**, not even a keyword hit: that tab is the webmail
+  triage view, and mixing archive mail into it is the bug this split guards
+  against. Only the critical keyword list runs, and only to decide whether to
+  push Telegram; its notice links to the archived row's web view. Forwarding
+  is skipped as well, because relaying every arriving email would invite a
+  mail loop.
 
 The mode is switchable per account via `PATCH /accounts/:id`. Switching does not
-migrate existing rows; it only changes where future scans write. To recover
-matches from mail that is already archived, `POST /messages/recheck-archive`
-re-runs the current keywords over the archive.
+migrate existing rows; it only changes where future scans write. A boot-time
+fixup (bootstrap-schema.ts) removes any triage rows previously written by
+`all` mailboxes — they are exact duplicates of their archive rows, so no mail
+is lost.
 
 ## Keyword Matching
 
@@ -223,10 +228,6 @@ See `.env.example` for the Supabase connection-string format.
   accepts (what was searched), so every match for a keyword exports in one
   request. Capped at 2000 rows; the `X-Export-Truncated` header says when
 - `POST /messages/delete-bulk` — remove several matches at once
-- `POST /messages/recheck-archive` — re-run the current keywords over the
-  unfiltered archive and surface the hits in Messages. Recovers matches missed
-  before a keyword was added, or by the older matcher. Safe to repeat; nothing
-  found here is forwarded
 - `GET /inbox` (`accountId`, `provider`, `search`, `receivedFrom`,
   `receivedTo`, `limit`, `offset`), `GET /inbox/:id`, `DELETE /inbox/:id` —
   unfiltered archive. `search` covers subject, sender, recipient, snippet, and
@@ -442,11 +443,12 @@ pnpm --filter @workspace/scripts run icons
 
 - Pages: Dashboard `/`, Messages `/messages`, Hostinger Inbox `/inbox`,
   Accounts `/accounts`, Hostinger `/hostinger`, Settings `/settings`.
-  - **Messages** — keyword matches only, across all accounts in `keywords`
-    mode (plus hits surfaced from archived mailboxes). Searchable, with
-    per-row selection, select-page, bulk delete, and JSON export — of the
-    selection or of every message matching the current search, full bodies
-    included. "Re-check Archive" re-runs the keywords over the archive.
+  - **Messages** — the webmail triage queue: keyword matches from
+    `keywords`-mode accounts only, never archive mail. Searchable, with
+    per-row selection that persists across pages, Select page, Select all
+    matching (one click spans every page), bulk delete, and JSON export — of
+    the selection or of every message matching the current search, full
+    bodies included.
   - **Hostinger Inbox** — the unfiltered archive, with search (subject,
     sender, recipient, snippet, and body), mailbox filter, pagination, and
     the same selection/delete/export-JSON toolbar. Deliberately a separate

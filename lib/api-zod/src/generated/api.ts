@@ -66,7 +66,7 @@ export const ListAccountsResponseItem = zod.object({
   captureMode: zod
     .enum(["keywords", "all"])
     .describe(
-      "What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into \/messages and forwards them. `all` also archives every arriving message into \/inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in \/messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.",
+      "What a scan stores. `keywords` (webmail triage): subject, sender, recipient, and body are tested against the configured keywords; matches go to the Messages queue and are forwarded if forwarding is on, and critical keywords additionally push Telegram. `all` (Hostinger mailboxes): every message is archived into the Hostinger Inbox tab, never into the Messages queue — only the critical list runs, and only to decide whether to push Telegram. Forwarding never happens for `all` mailboxes, because relaying every arriving email would be a mail loop.",
     ),
   imapHost: zod.string(),
   imapPort: zod.number(),
@@ -197,7 +197,7 @@ export const CreateAccountsBulkResponse = zod.object({
       captureMode: zod
         .enum(["keywords", "all"])
         .describe(
-          "What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into \/messages and forwards them. `all` also archives every arriving message into \/inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in \/messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.",
+          "What a scan stores. `keywords` (webmail triage): subject, sender, recipient, and body are tested against the configured keywords; matches go to the Messages queue and are forwarded if forwarding is on, and critical keywords additionally push Telegram. `all` (Hostinger mailboxes): every message is archived into the Hostinger Inbox tab, never into the Messages queue — only the critical list runs, and only to decide whether to push Telegram. Forwarding never happens for `all` mailboxes, because relaying every arriving email would be a mail loop.",
         ),
       imapHost: zod.string(),
       imapPort: zod.number(),
@@ -268,7 +268,7 @@ export const CreateHostingerAccountsBody = zod
     captureMode: zod
       .enum(["keywords", "all"])
       .describe(
-        "What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into \/messages and forwards them. `all` also archives every arriving message into \/inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in \/messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.",
+        "What a scan stores. `keywords` (webmail triage): subject, sender, recipient, and body are tested against the configured keywords; matches go to the Messages queue and are forwarded if forwarding is on, and critical keywords additionally push Telegram. `all` (Hostinger mailboxes): every message is archived into the Hostinger Inbox tab, never into the Messages queue — only the critical list runs, and only to decide whether to push Telegram. Forwarding never happens for `all` mailboxes, because relaying every arriving email would be a mail loop.",
       )
       .default(createHostingerAccountsBodyCaptureModeDefault)
       .describe(
@@ -299,7 +299,7 @@ export const CreateHostingerAccountsResponse = zod.object({
       captureMode: zod
         .enum(["keywords", "all"])
         .describe(
-          "What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into \/messages and forwards them. `all` also archives every arriving message into \/inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in \/messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.",
+          "What a scan stores. `keywords` (webmail triage): subject, sender, recipient, and body are tested against the configured keywords; matches go to the Messages queue and are forwarded if forwarding is on, and critical keywords additionally push Telegram. `all` (Hostinger mailboxes): every message is archived into the Hostinger Inbox tab, never into the Messages queue — only the critical list runs, and only to decide whether to push Telegram. Forwarding never happens for `all` mailboxes, because relaying every arriving email would be a mail loop.",
         ),
       imapHost: zod.string(),
       imapPort: zod.number(),
@@ -458,7 +458,7 @@ export const UpdateAccountBody = zod
       .enum(["keywords", "all"])
       .optional()
       .describe(
-        "What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into \/messages and forwards them. `all` also archives every arriving message into \/inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in \/messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.",
+        "What a scan stores. `keywords` (webmail triage): subject, sender, recipient, and body are tested against the configured keywords; matches go to the Messages queue and are forwarded if forwarding is on, and critical keywords additionally push Telegram. `all` (Hostinger mailboxes): every message is archived into the Hostinger Inbox tab, never into the Messages queue — only the critical list runs, and only to decide whether to push Telegram. Forwarding never happens for `all` mailboxes, because relaying every arriving email would be a mail loop.",
       ),
   })
   .describe(
@@ -477,7 +477,7 @@ export const UpdateAccountResponse = zod.object({
   captureMode: zod
     .enum(["keywords", "all"])
     .describe(
-      "What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into \/messages and forwards them. `all` also archives every arriving message into \/inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in \/messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.",
+      "What a scan stores. `keywords` (webmail triage): subject, sender, recipient, and body are tested against the configured keywords; matches go to the Messages queue and are forwarded if forwarding is on, and critical keywords additionally push Telegram. `all` (Hostinger mailboxes): every message is archived into the Hostinger Inbox tab, never into the Messages queue — only the critical list runs, and only to decide whether to push Telegram. Forwarding never happens for `all` mailboxes, because relaying every arriving email would be a mail loop.",
     ),
   imapHost: zod.string(),
   imapPort: zod.number(),
@@ -528,7 +528,7 @@ export const ScanAccountResponse = zod.object({
   matched: zod
     .number()
     .describe(
-      "Keyword matches stored, in either capture mode. Forwarded ones came from a `keywords` mailbox.",
+      "Keyword matches stored into the Messages queue, which only a `keywords` mailbox writes. An `all` mailbox archives instead and reports 0 here.",
     ),
   archived: zod.number().describe("Messages archived, for an `all` mailbox."),
   forwarded: zod.number(),
@@ -567,7 +567,7 @@ export const DiscoverAccountHostResponse = zod.object({
       captureMode: zod
         .enum(["keywords", "all"])
         .describe(
-          "What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into \/messages and forwards them. `all` also archives every arriving message into \/inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in \/messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.",
+          "What a scan stores. `keywords` (webmail triage): subject, sender, recipient, and body are tested against the configured keywords; matches go to the Messages queue and are forwarded if forwarding is on, and critical keywords additionally push Telegram. `all` (Hostinger mailboxes): every message is archived into the Hostinger Inbox tab, never into the Messages queue — only the critical list runs, and only to decide whether to push Telegram. Forwarding never happens for `all` mailboxes, because relaying every arriving email would be a mail loop.",
         ),
       imapHost: zod.string(),
       imapPort: zod.number(),
@@ -779,22 +779,6 @@ export const DeleteMessagesBulkResponse = zod.object({
     .describe(
       "Ids that did not match a live account, because they never existed or were already removed. Reported rather than treated as an error, since the end state is the one that was asked for.",
     ),
-});
-
-/**
- * Re-tests every archived message with the current keywords, using the same matcher a live scan uses, and surfaces the hits in the Messages queue. Recovers matches that were missed before a keyword was added, or by the older matcher that could not see into HTML entities and link targets. Safe to run repeatedly: already-matched messages are left alone, and nothing found here is forwarded.
- * @summary Re-run keyword matching over the unfiltered archive
- */
-export const RecheckArchiveForMatchesResponse = zod.object({
-  scanned: zod
-    .number()
-    .describe("Archived messages re-tested with the current keywords."),
-  inserted: zod
-    .number()
-    .describe(
-      "Messages newly surfaced in the Messages queue. Already-matched messages are left alone, so a repeated run reports only new hits.",
-    ),
-  message: zod.string(),
 });
 
 /**

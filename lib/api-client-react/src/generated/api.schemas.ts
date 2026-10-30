@@ -32,7 +32,7 @@ export const AccountProvider = {
 } as const;
 
 /**
- * What a scan stores in addition to keyword matching. `keywords` stores only keyword matches into /messages and forwards them. `all` also archives every arriving message into /inbox. Keyword matching itself runs in both modes — a match in an archived mailbox still lands in /messages — only forwarding is reserved for `keywords`, because relaying every arriving email would be a mail loop.
+ * What a scan stores. `keywords` (webmail triage): subject, sender, recipient, and body are tested against the configured keywords; matches go to the Messages queue and are forwarded if forwarding is on, and critical keywords additionally push Telegram. `all` (Hostinger mailboxes): every message is archived into the Hostinger Inbox tab, never into the Messages queue — only the critical list runs, and only to decide whether to push Telegram. Forwarding never happens for `all` mailboxes, because relaying every arriving email would be a mail loop.
  */
 export type CaptureMode = (typeof CaptureMode)[keyof typeof CaptureMode];
 
@@ -224,7 +224,7 @@ export interface TestResult {
 
 export interface ScanResult {
   scanned: number;
-  /** Keyword matches stored, in either capture mode. Forwarded ones came from a `keywords` mailbox. */
+  /** Keyword matches stored into the Messages queue, which only a `keywords` mailbox writes. An `all` mailbox archives instead and reports 0 here. */
   matched: number;
   /** Messages archived, for an `all` mailbox. */
   archived: number;
@@ -448,14 +448,6 @@ export interface SelectedIdsResult {
   ids: number[];
   /** True when matches exist beyond the selection cap of 2000 — the ids cover the newest 2000. */
   truncated: boolean;
-}
-
-export interface RecheckArchiveResult {
-  /** Archived messages re-tested with the current keywords. */
-  scanned: number;
-  /** Messages newly surfaced in the Messages queue. Already-matched messages are left alone, so a repeated run reports only new hits. */
-  inserted: number;
-  message: string;
 }
 
 export interface DiscoverHostResult {

@@ -46,7 +46,6 @@ import type {
   LoginBody,
   MatchedMessage,
   MessageDetail,
-  RecheckArchiveResult,
   ScanAllAccountsParams,
   ScanResult,
   SelectedIdsResult,
@@ -1869,88 +1868,6 @@ export const useDeleteMessagesBulk = <
   TContext
 > => {
   return useMutation(getDeleteMessagesBulkMutationOptions(options));
-};
-
-/**
- * Re-tests every archived message with the current keywords, using the same matcher a live scan uses, and surfaces the hits in the Messages queue. Recovers matches that were missed before a keyword was added, or by the older matcher that could not see into HTML entities and link targets. Safe to run repeatedly: already-matched messages are left alone, and nothing found here is forwarded.
- * @summary Re-run keyword matching over the unfiltered archive
- */
-export const getRecheckArchiveForMatchesUrl = () => {
-  return `/api/messages/recheck-archive`;
-};
-
-export const recheckArchiveForMatches = async (
-  options?: RequestInit,
-): Promise<RecheckArchiveResult> => {
-  return customFetch<RecheckArchiveResult>(getRecheckArchiveForMatchesUrl(), {
-    ...options,
-    method: "POST",
-  });
-};
-
-export const getRecheckArchiveForMatchesMutationOptions = <
-  TError = ErrorType<unknown>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof recheckArchiveForMatches>>,
-    TError,
-    void,
-    TContext
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}): UseMutationOptions<
-  Awaited<ReturnType<typeof recheckArchiveForMatches>>,
-  TError,
-  void,
-  TContext
-> => {
-  const mutationKey = ["recheckArchiveForMatches"];
-  const { mutation: mutationOptions, request: requestOptions } = options
-    ? options.mutation &&
-      "mutationKey" in options.mutation &&
-      options.mutation.mutationKey
-      ? options
-      : { ...options, mutation: { ...options.mutation, mutationKey } }
-    : { mutation: { mutationKey }, request: undefined };
-
-  const mutationFn: MutationFunction<
-    Awaited<ReturnType<typeof recheckArchiveForMatches>>,
-    void
-  > = () => {
-    return recheckArchiveForMatches(requestOptions);
-  };
-
-  return { mutationFn, ...mutationOptions };
-};
-
-export type RecheckArchiveForMatchesMutationResult = NonNullable<
-  Awaited<ReturnType<typeof recheckArchiveForMatches>>
->;
-
-export type RecheckArchiveForMatchesMutationError = ErrorType<unknown>;
-
-/**
- * @summary Re-run keyword matching over the unfiltered archive
- */
-export const useRecheckArchiveForMatches = <
-  TError = ErrorType<unknown>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof recheckArchiveForMatches>>,
-    TError,
-    void,
-    TContext
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}): UseMutationResult<
-  Awaited<ReturnType<typeof recheckArchiveForMatches>>,
-  TError,
-  void,
-  TContext
-> => {
-  return useMutation(getRecheckArchiveForMatchesMutationOptions(options));
 };
 
 /**
